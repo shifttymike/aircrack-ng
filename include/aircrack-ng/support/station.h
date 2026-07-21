@@ -82,6 +82,13 @@ struct ac_channel_info
 	/* Maximum TX rate          */
 };
 
+struct ax_channel_info
+{
+	unsigned char center_sgmt[2];
+	unsigned char split_chan;
+	unsigned char mhz_160_chan;
+};
+
 enum channel_width_enum
 {
 	CHANNEL_UNKNOWN_WIDTH,
@@ -107,18 +114,26 @@ struct AP_info
 	time_t tinit, tlast; /* first and last time seen */
 
 	int channel; /* AP radio channel         */
+	int band; /* AP radio band: 24, 5, 6, or 0 */
 	enum channel_width_enum channel_width; /* Channel width            */
 	char standard[3]; /* 802.11 standard: n or ac */
 	struct n_channel_info n_channel; /* 802.11n channel info     */
 	struct ac_channel_info ac_channel; /* 802.11ac channel info    */
+	struct ax_channel_info ax_channel; /* 802.11ax channel info    */
 	int max_speed; /* AP maximum speed in Mb/s */
+	int bss_load_station_count; /* Stations from BSS Load IE */
 	int avg_power; /* averaged signal power    */
 	int best_power; /* best signal power    */
 	int power_index; /* index in power ring buf. */
 	int power_lvl[NB_PWR]; /* signal power ring buffer */
 	int preamble; /* 0 = long, 1 = short      */
 	unsigned int security; /* ENC_*, AUTH_*, STD_*     */
+	int mfp_capable; /* RSN MFP capable bit      */
+	int mfp_required; /* RSN MFP required bit     */
+	int mfp_warned; /* log_sta warning shown    */
 	int beacon_logged; /* We need 1 beacon per AP  */
+	int pmkid_logged; /* PMKID message shown      */
+	int handshake_logged; /* handshake message shown */
 	int dict_started; /* 1 if dict attack started */
 	int ssid_length; /* length of ssid           */
 	float gps_loc_min[5]; /* min gps coordinates      */
@@ -214,9 +229,12 @@ struct ST_info
 	int qos_to_ds; /* does it use 802.11e to ds */
 	int qos_fr_ds; /* does it receive 802.11e   */
 	int channel; /* Channel station is seen   */
+	int band; /* Station radio band: 24, 5, 6, or 0 */
 	float gps_loc_min[5]; /* min gps coordinates      */
 	float gps_loc_max[5]; /* max gps coordinates      */
 	float gps_loc_best[5]; /* best gps coordinates     */
+	int marked;
+	int marked_color;
 };
 
 #endif //AIRCRACK_NG_STATION_H

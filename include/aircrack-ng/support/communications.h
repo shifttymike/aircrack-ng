@@ -155,6 +155,7 @@ struct communication_options
 	FILE * f_ivs; /* output ivs file      */
 	FILE * f_xor; /* output prga file     */
 	FILE * f_logcsv; /* output rolling AP/GPS csv log */
+	FILE * f_probes; /* output distinct probe text log */
 
 	char * f_cap_name;
 	char * prefix;
@@ -164,6 +165,7 @@ struct communication_options
 	int output_format_kismet_csv;
 	int output_format_kismet_netxml;
 	int output_format_log_csv;
+	int output_format_probes;
 
 	int usegpsd; /* do we use GPSd?      */
 	int record_data; /* do we record data?   */
@@ -372,7 +374,10 @@ int capture_ask_packet(int * caplen, int just_grab);
 int filter_packet(unsigned char * h80211, int caplen);
 
 int dump_initialize(char * prefix);
-int dump_initialize_multi_format(char * prefix, int ivs_only);
+int dump_initialize_multi_format(char * prefix,
+						 int ivs_only,
+						 int ppi,
+						 int * tcp_sock_fd);
 
 int check_shared_key(const uint8_t * h80211, size_t caplen);
 int encrypt_data(uint8_t * data, size_t length);

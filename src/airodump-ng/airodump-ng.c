@@ -61,11 +61,17 @@
 #include <errno.h>
 #include <time.h>
 #include <getopt.h>
+#include <fcntl.h>
 #include <pthread.h>
+#include <termios.h>
 #include <limits.h>
-#include <inttypes.h>
 
-#include "aircrack-ng/pcre/compat-pcre.h"
+#include <sys/wait.h>
+
+#ifdef HAVE_PCRE
+#include <pcre.h>
+#endif
+
 #include "aircrack-ng/defs.h"
 #include "aircrack-ng/version.h"
 #include "aircrack-ng/support/pcap_local.h"
@@ -81,6 +87,7 @@
 #include "aircrack-ng/support/common.h"
 #include "aircrack-ng/support/mcs_index_rates.h"
 #include "aircrack-ng/utf8/verifyssid.h"
+#include "airodump_tui.h"
 #include "aircrack-ng/tui/console.h"
 #include "radiotap/radiotap.h"
 #include "radiotap/radiotap_iter.h"
@@ -105,32 +112,645 @@ static const char * OUI_PATHS[]
 	   NULL};
 
 static int read_pkts = 0;
+static int colors_enabled = 0;
+
+static int wi_set_freq_ax(struct wif * wi,
+					  int frequency,
+					  int bandwidth,
+					  int c_seg0,
+					  int c_seg1)
+{
+	(void) bandwidth;
+	(void) c_seg0;
+	(void) c_seg1;
+	return wi_set_freq(wi, frequency);
+}
+
+#define CHANNEL_AX40 40
+#define CHANNEL_AX80 80
+#define CHANNEL_AX80_80 8080
+#define CHANNEL_AX160 160
+
+struct probe_log_entry
+{
+	struct probe_log_entry * next;
+	time_t first_seen;
+	time_t last_seen;
+	unsigned long times_seen;
+	uint8_t station_mac[6];
+	size_t essid_len;
+	unsigned char essid[ESSID_LENGTH + 1];
+};
+
+static struct probe_log_entry * probe_log_entries = NULL;
 
 static int abg_chans[]
-	= {1,	7,	 13,  2,   8,	3,	 14,  9,   4,	10,	 5,	  11,  6,
-	   12,	36,	 38,  40,  42,	44,	 46,  48,  50,	52,	 54,  56,  58,
-	   60,	62,	 64,  100, 102, 104, 106, 108, 110, 112, 114, 116, 118,
-	   120, 122, 124, 126, 128, 132, 134, 136, 138, 140, 142, 144, 149,
-	   151, 153, 155, 157, 159, 161, 165, 169, 173, 0};
-
-static int bg_chans[] = {1, 7, 13, 2, 8, 3, 14, 9, 4, 10, 5, 11, 6, 12, 0};
+	= {1,   2,   3,   4,   5,   6,   7,   8,   9,   10,  11,  12,  13,
+	   14,  36,  40,  44,  48,  52,  56,  60,  64,  100, 104, 108, 112,
+	   116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161, 165,
+	   169, 173, 0};
+static int bg_chans[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 0};
+static const int bg_chans_base[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 0};
 
 static int a_chans[]
-	= {36,	38,	 40,  42,  44,	46,	 48,  50,  52,	54,	 56,  58,
-	   60,	62,	 64,  100, 102, 104, 106, 108, 110, 112, 114, 116,
-	   118, 120, 122, 124, 126, 128, 132, 134, 136, 138, 140, 142,
-	   144, 149, 151, 153, 155, 157, 159, 161, 165, 169, 173, 0};
+	= {36,  40,  44,  48,  52,  56,  60,  64,  100, 104, 108, 112,
+	   116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161,
+	   165, 169, 173, 0};
+static const int a_chans_base[]
+	= {36,  40,  44,  48,  52,  56,  60,  64,  100, 104, 108, 112,
+	   116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161,
+	   165, 169, 173, 0};
+
+// Define an array of all ax channels - primary and secondary
+int ax_all_chans[] 
+	= {1,   2,   5,   9,   13,  17,  21,  25,  27,  29,  33,  37,
+	   41,  45,  47,  49,  51,  53,  55,  57,  59,  61,  63,  65,
+	   67,  69,  71,  73,  75,  77,  79,  81,  83,  85,  87,  89,
+	   91,  93,  95,  97,  99,  101, 103, 105, 107, 109, 111, 113,
+	   115, 117, 119, 121, 123, 125, 127, 129, 131, 133, 135, 137,
+	   139, 141, 143, 145, 147, 149, 151, 153, 155, 157, 159, 161,
+	   163, 165, 167, 169, 171, 173, 175, 177, 179, 181, 183, 185,
+	   187, 189, 191, 193, 195, 197, 199, 201, 203, 205, 207, 209,
+	   211, 213, 215, 217, 219, 221, 223, 225, 227, 229, 231, 233,
+	   0};
+static const int ax_all_chans_base[] 
+	= {1,   2,   5,   9,   13,  17,  21,  25,  27,  29,  33,  37,
+	   41,  45,  47,  49,  51,  53,  55,  57,  59,  61,  63,  65,
+	   67,  69,  71,  73,  75,  77,  79,  81,  83,  85,  87,  89,
+	   91,  93,  95,  97,  99,  101, 103, 105, 107, 109, 111, 113,
+	   115, 117, 119, 121, 123, 125, 127, 129, 131, 133, 135, 137,
+	   139, 141, 143, 145, 147, 149, 151, 153, 155, 157, 159, 161,
+	   163, 165, 167, 169, 171, 173, 175, 177, 179, 181, 183, 185,
+	   187, 189, 191, 193, 195, 197, 199, 201, 203, 205, 207, 209,
+	   211, 213, 215, 217, 219, 221, 223, 225, 227, 229, 231, 233,
+	   0};
+
+// Define an array of the ax primary channels
+static int ax_chans[] 
+	= {1,   2,   5,   9,   13,  17,  21,  25,  29,  33,  37,  41,
+	   45,  49,  53,  57,  61,  65,  69,  73,  77,  81,  85,  89,
+	   93,  97,  101, 105, 109, 113, 117, 121, 125, 129, 133, 137,
+	   141, 145, 149, 153, 157, 161, 165, 169, 173, 177, 181, 185,
+	   189, 193, 197, 201, 205, 209, 213, 217, 221, 225, 229, 233, 0};
+static const int ax_chans_base[] 
+	= {1,   2,   5,   9,   13,  17,  21,  25,  29,  33,  37,  41,
+	   45,  49,  53,  57,  61,  65,  69,  73,  77,  81,  85,  89,
+	   93,  97,  101, 105, 109, 113, 117, 121, 125, 129, 133, 137,
+	   141, 145, 149, 153, 157, 161, 165, 169, 173, 177, 181, 185,
+	   189, 193, 197, 201, 205, 209, 213, 217, 221, 225, 229, 233, 0};
+
+// Define a lookup table for channel to frequency mapping for bg
+static const int channel_frequency_map_bg[] = {
+    1, 2412,
+    2, 2417,
+    3, 2422,
+    4, 2427,
+    5, 2432,
+    6, 2437,
+    7, 2442,
+    8, 2447,
+    9, 2452,
+    10, 2457,
+    11, 2462,
+    12, 2467,
+    13, 2472,
+    14, 2484,  // Channel 14 is 12 MHz away from channel 13
+    -1, -1     // End marker
+};
+
+// Define a lookup table for channel to frequency mapping for a
+static const int channel_frequency_map_a[] = {
+    36, 5180,
+    40, 5200,
+    44, 5220,
+    48, 5240,
+    52, 5260,
+    56, 5280,
+    60, 5300,
+    64, 5320,
+    100, 5500,
+    104, 5520,
+    108, 5540,
+    112, 5560,
+    116, 5580,
+    120, 5600,
+    124, 5620,
+    128, 5640,
+    132, 5660,
+    136, 5680,
+    140, 5700,
+    149, 5745,
+    153, 5765,
+    157, 5785,
+    161, 5805,
+    165, 5825,
+    169, 5845,
+    173, 5865,
+    -1, -1     // End marker
+};
+
+// Define a lookup table for channel to frequency mapping for ax
+static const int channel_frequency_map_ax[] = {
+	1,   5955,
+	2,   5935,
+	5,   5975,
+	9,   5995,
+	13,  6015,
+	17,  6035,
+	21,  6055,
+	25,  6075,
+	29,  6095,
+	33,  6115,
+	37,  6135,
+	41,  6155,
+	45,  6175,
+	49,  6195,
+	53,  6215,
+	57,  6235,
+	61,  6255,
+	65,  6275,
+	69,  6295,
+	73,  6315,
+	77,  6335,
+	81,  6355,
+	85,  6375,
+	89,  6395,
+	93,  6415,
+	97,  6435,
+	101, 6455,
+	105, 6475,
+	109, 6495,
+	113, 6515,
+	117, 6535,
+	121, 6555,
+	125, 6575,
+	129, 6595,
+	133, 6615,
+	137, 6635,
+	141, 6655,
+	145, 6675,
+	149, 6695,
+	153, 6715,
+	157, 6735,
+	161, 6755,
+	165, 6775,
+	169, 6795,
+	173, 6815,
+	177, 6835,
+	181, 6855,
+	185, 6875,
+	189, 6895,
+	193, 6915,
+	197, 6935,
+	201, 6955,
+	205, 6975,
+	209, 6995,
+	213, 7015,
+	217, 7035,
+	221, 7055,
+	225, 7075,
+	229, 7095,
+	233, 7115,
+	-1,  -1     // End marker
+};
+
+// Function to convert network order 24-bit values into host-order
+static uint32_t letoh24(const uint8_t *p) {
+    // Manually construct the 24-bit value in little-endian order
+    uint32_t val = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
+
+    // For little-endian systems, the value is already correct.
+    // For big-endian systems, we need to rearrange the bytes.
+    #if __BYTE_ORDER == __BIG_ENDIAN
+    val = ((val & 0x0000FF) << 16) | (val & 0x00FF00) | ((val & 0xFF0000) >> 16);
+    #endif
+
+    return val;
+}
+
+#define MAX_FREQS 1000
+#define MAX_FREQ_STR_LEN 6 // Each frequency is at most 5 digits plus a comma
+
+// PPI Header Structure
+struct ppi_hdr {
+    uint8_t  pph_version;
+    uint8_t  pph_flags;
+    uint16_t pph_len;
+    uint32_t pph_dlt;
+};
+
+// PPI Field Header Structure
+struct ppi_fieldhdr {
+    uint16_t pfh_type;
+    uint16_t pfh_datalen;
+};
+
+// Constants for PPI
+#define PPI_HDRLEN sizeof(struct ppi_hdr)
+#define PPI_FIELD_HDRLEN sizeof(struct ppi_fieldhdr)
+#define PPI_80211_COMMON 2
+#define PPI_GEOTAG 30002
+
+double last_coordinates[3] = {0.0, 0.0, 0.0};  // latitude, longitude, altitude
+
+// Function to convert floating-point GPS data to a fixed-point representation
+static uint32_t float_to_fixed37(float value) {
+    return (uint32_t)((value + 180)* 10000000);
+}
+
+// Function to convert a float altitude value into a fixed-point representation
+static uint32_t float_to_fixed64(float value) {
+	return (uint32_t)((value + 180000.0) * 10000);
+}
+
+// Function to calculate the length of the ppi header
+static size_t calculate_ppi_header_length(float gpsLat, float gpsLon, float gpsAlt) {
+    size_t ppi_total_len = PPI_HDRLEN; // Base length of PPI header - 4 bytes
+
+    // Add length of the 802.11-Common PPI data header
+    ppi_total_len += PPI_FIELD_HDRLEN + 20; // 20 is the fixed length of the 802.11-Common data (total of 24)
+
+    // Check if GPS data is available
+    if (gpsLat != 0 && gpsLon != 0) {
+        // Add length of the PPI-GEOLOCATION data fields
+        ppi_total_len += PPI_FIELD_HDRLEN; // 4 bytes  
+		ppi_total_len += 2 * sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint32_t); // Geo Tag header [rev (1 byte), padding (1 byte), len (2 bytes), field mask (4 bytes)]
+        ppi_total_len += 2 * sizeof(uint32_t);// Lat, Lon
+        if (gpsAlt != 0) {
+             ppi_total_len += sizeof(uint32_t); // Altitude
+        }
+    }
+
+    return ppi_total_len;
+}
+
+static void write_ppi_headers_to_buffer(uint8_t *buffer, 
+                              uint64_t tsfTimer, uint16_t dataRate, 
+                              uint16_t freq, int8_t rssi, int8_t noise, 
+                              float gpsLat, float gpsLon, float gpsAlt) {
+    struct ppi_hdr pph;
+    struct ppi_fieldhdr pfh;
+    uint32_t gpsFieldMask = 0;
+    uint32_t fixedLat, fixedLon, fixedAlt;
+    uint16_t geoFhLen;
+    uint8_t geoTagRev = 2;
+    uint8_t geoTagPad = 0;
+    uint16_t geoTagHeaderLen;
+    size_t offset = 0;
+
+    // Initialize PPI header
+    pph.pph_version = 0;
+    pph.pph_flags = 0;
+    pph.pph_len = PPI_HDRLEN;  // Will be updated later
+    pph.pph_dlt = 105;  // Example DLT value for 802.11
+
+    // Write PPI header
+    memcpy(buffer + offset, &pph, PPI_HDRLEN);
+    offset += PPI_HDRLEN;
+
+    // Prepare 802.11-Common PPI field header
+    pfh.pfh_type = PPI_80211_COMMON;
+    pfh.pfh_datalen = 20;
+    memcpy(buffer + offset, &pfh, PPI_FIELD_HDRLEN);
+    offset += PPI_FIELD_HDRLEN;
+
+    // Write 802.11-Common data fields
+    memcpy(buffer + offset, &tsfTimer, sizeof(tsfTimer));
+    offset += sizeof(tsfTimer);
+    uint16_t flags = 0;
+    memcpy(buffer + offset, &flags, sizeof(flags));
+    offset += sizeof(flags);
+    memcpy(buffer + offset, &dataRate, sizeof(dataRate));
+    offset += sizeof(dataRate);
+    memcpy(buffer + offset, &freq, sizeof(freq));
+    offset += sizeof(freq);
+    uint16_t channelFlags = 0;
+    memcpy(buffer + offset, &channelFlags, sizeof(channelFlags));
+    offset += sizeof(channelFlags);
+    uint8_t fhssHopset = 0, fhssPattern = 0;
+    memcpy(buffer + offset, &fhssHopset, sizeof(fhssHopset));
+    offset += sizeof(fhssHopset);
+    memcpy(buffer + offset, &fhssPattern, sizeof(fhssPattern));
+    offset += sizeof(fhssPattern);
+    memcpy(buffer + offset, &rssi, sizeof(rssi));
+    offset += sizeof(rssi);
+    memcpy(buffer + offset, &noise, sizeof(noise));
+    offset += sizeof(noise);
+
+    // If GPS data is available, write Geolocation field
+    if (gpsLat != 0 && gpsLon != 0) {
+        fixedLat = float_to_fixed37(gpsLat);
+        fixedLon = float_to_fixed37(gpsLon);
+        gpsFieldMask |= 0b00000110; // Lat/Long fields present
+        if (gpsAlt != 0) {
+            fixedAlt = float_to_fixed64(gpsAlt);
+            gpsFieldMask |= 0b00001000; // Altitude field present
+        }
+
+        pfh.pfh_type = PPI_GEOTAG;
+        geoFhLen = 8 + sizeof(fixedLat) + sizeof(fixedLon);
+        if (gpsAlt != 0) geoFhLen += sizeof(fixedAlt);
+        pfh.pfh_datalen = geoFhLen;
+
+        memcpy(buffer + offset, &pfh, PPI_FIELD_HDRLEN);
+        offset += PPI_FIELD_HDRLEN;
+        memcpy(buffer + offset, &geoTagRev, sizeof(geoTagRev));
+        offset += sizeof(geoTagRev);
+        memcpy(buffer + offset, &geoTagPad, sizeof(geoTagPad));
+        offset += sizeof(geoTagPad);
+        geoTagHeaderLen = 8 + sizeof(fixedLat) + sizeof(fixedLon);
+        if (gpsAlt != 0) geoTagHeaderLen += sizeof(fixedAlt);
+        memcpy(buffer + offset, &geoTagHeaderLen, sizeof(geoTagHeaderLen));
+        offset += sizeof(geoTagHeaderLen);
+        memcpy(buffer + offset, &gpsFieldMask, sizeof(gpsFieldMask));
+        offset += sizeof(gpsFieldMask);
+        memcpy(buffer + offset, &fixedLat, sizeof(fixedLat));
+        offset += sizeof(fixedLat);
+        memcpy(buffer + offset, &fixedLon, sizeof(fixedLon));
+        offset += sizeof(fixedLon);
+        if (gpsAlt != 0) {
+            memcpy(buffer + offset, &fixedAlt, sizeof(fixedAlt));
+            offset += sizeof(fixedAlt);
+        }
+    }
+
+    // Update total length in PPI header
+    ((struct ppi_hdr *)buffer)->pph_len = (uint16_t)offset;
+}
+
+
+static void write_ppi_headers(FILE *file, uint64_t tsfTimer, uint16_t dataRate, uint16_t freq, int8_t rssi, int8_t noise, float gpsLat, float gpsLon, float gpsAlt) {
+    uint8_t *common_buffer = NULL, *gps_buffer = NULL;
+    size_t common_size = 0, gps_size = 0, total_size = 0;
+
+    // **1. Build 802.11-Common Field Header and Data**
+    common_size = PPI_FIELD_HDRLEN + 20; // Header size + 802.11-Common data size
+    common_buffer = malloc(common_size);
+    if (!common_buffer) {
+        perror("malloc failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Fill 802.11-Common Field Header
+    struct ppi_fieldhdr common_fh = {
+        .pfh_type = htole16(PPI_80211_COMMON),
+        .pfh_datalen = htole16(20)
+    };
+    memcpy(common_buffer, &common_fh, PPI_FIELD_HDRLEN);
+
+    // Fill 802.11-Common Data
+    size_t offset = PPI_FIELD_HDRLEN;
+    uint64_t le_tsfTimer = htole64(tsfTimer);
+    memcpy(common_buffer + offset, &le_tsfTimer, sizeof(le_tsfTimer));
+    offset += sizeof(le_tsfTimer);
+
+    uint16_t flags = 0;
+    memcpy(common_buffer + offset, &flags, sizeof(flags));
+    offset += sizeof(flags);
+
+    uint16_t le_dataRate = htole16(dataRate);
+    memcpy(common_buffer + offset, &le_dataRate, sizeof(le_dataRate));
+    offset += sizeof(le_dataRate);
+
+    uint16_t le_freq = htole16(freq);
+    memcpy(common_buffer + offset, &le_freq, sizeof(le_freq));
+    offset += sizeof(le_freq);
+
+    uint16_t channelFlags = 0;
+    memcpy(common_buffer + offset, &channelFlags, sizeof(channelFlags));
+    offset += sizeof(channelFlags);
+
+    uint8_t fhssHopset = 0, fhssPattern = 0;
+    memcpy(common_buffer + offset, &fhssHopset, sizeof(fhssHopset));
+    offset += sizeof(fhssHopset);
+    memcpy(common_buffer + offset, &fhssPattern, sizeof(fhssPattern));
+    offset += sizeof(fhssPattern);
+
+    memcpy(common_buffer + offset, &rssi, sizeof(rssi));
+    offset += sizeof(rssi);
+    memcpy(common_buffer + offset, &noise, sizeof(noise));
+    offset += sizeof(noise);
+
+    // **2. Optionally Build GPS Data**
+    if (gpsLat != 0 && gpsLon != 0) {
+        uint32_t gpsFieldMask = 0;
+        uint32_t fixedLat = float_to_fixed37(gpsLat);
+        uint32_t fixedLon = float_to_fixed37(gpsLon);
+        gpsFieldMask |= 0b00000110; // Lat/Long fields present
+
+        uint32_t fixedAlt = 0;
+        if (gpsAlt != 0) {
+            fixedAlt = float_to_fixed64(gpsAlt);
+            gpsFieldMask |= 0b00001000; // Altitude field present
+        }
+
+        gps_size = PPI_FIELD_HDRLEN + 8 + sizeof(fixedLat) + sizeof(fixedLon) + (gpsAlt != 0 ? sizeof(fixedAlt) : 0);
+        gps_buffer = malloc(gps_size);
+        if (!gps_buffer) {
+            perror("malloc failed");
+            free(common_buffer);
+            exit(EXIT_FAILURE);
+        }
+
+        struct ppi_fieldhdr gps_fh = {
+            .pfh_type = htole16(PPI_GEOTAG),
+            .pfh_datalen = htole16(gps_size - PPI_FIELD_HDRLEN)
+        };
+        memcpy(gps_buffer, &gps_fh, PPI_FIELD_HDRLEN);
+
+        offset = PPI_FIELD_HDRLEN;
+        uint8_t geoTagRev = 2, geoTagPad = 0;
+        uint16_t geoTagHeaderLen = htole16(8 + sizeof(fixedLat) + sizeof(fixedLon) + (gpsAlt != 0 ? sizeof(fixedAlt) : 0));
+        uint32_t le_gpsFieldMask = htole32(gpsFieldMask);
+
+        memcpy(gps_buffer + offset, &geoTagRev, sizeof(geoTagRev));
+        offset += sizeof(geoTagRev);
+        memcpy(gps_buffer + offset, &geoTagPad, sizeof(geoTagPad));
+        offset += sizeof(geoTagPad);
+        memcpy(gps_buffer + offset, &geoTagHeaderLen, sizeof(geoTagHeaderLen));
+        offset += sizeof(geoTagHeaderLen);
+        memcpy(gps_buffer + offset, &le_gpsFieldMask, sizeof(le_gpsFieldMask));
+        offset += sizeof(le_gpsFieldMask);
+
+        uint32_t le_fixedLat = htole32(fixedLat);
+        memcpy(gps_buffer + offset, &le_fixedLat, sizeof(le_fixedLat));
+        offset += sizeof(le_fixedLat);
+
+        uint32_t le_fixedLon = htole32(fixedLon);
+        memcpy(gps_buffer + offset, &le_fixedLon, sizeof(le_fixedLon));
+        offset += sizeof(le_fixedLon);
+
+        if (gpsAlt != 0) {
+            uint32_t le_fixedAlt = htole32(fixedAlt);
+            memcpy(gps_buffer + offset, &le_fixedAlt, sizeof(le_fixedAlt));
+            offset += sizeof(le_fixedAlt);
+        }
+    }
+
+    // **3. Calculate Total Size**
+    total_size = PPI_HDRLEN + common_size + gps_size;
+
+    // **4. Build PPI Header**
+    struct ppi_hdr pph = {
+        .pph_version = 0,
+        .pph_flags = 0,
+        .pph_len = htole16(total_size),
+        .pph_dlt = htole32(105) // Example DLT value for 802.11
+    };
+
+    // **5. Write Components to File**
+    fwrite(&pph, 1, PPI_HDRLEN, file);
+    fwrite(common_buffer, 1, common_size, file);
+    if (gps_buffer) {
+        fwrite(gps_buffer, 1, gps_size, file);
+    }
+
+    fflush(file);
+
+    // Free buffers
+    free(common_buffer);
+    free(gps_buffer);
+}
 
 static int * frequencies;
 
 static volatile int quitting = 0;
 static volatile time_t quitting_event_ts = 0;
-
+static volatile int deauth_launching = 0;
+static volatile time_t deauth_event_ts = 0;
+static volatile pid_t hopper_pid = -1;
+static int hopper_pipe_ready = 0;
+static volatile sig_atomic_t hopper_event_pending = 0;
+static volatile sig_atomic_t hopper_reject_seq = 0;
+static volatile sig_atomic_t hopper_reject_count = 0;
+static volatile sig_atomic_t hopper_reject_total = 0;
+static volatile sig_atomic_t hopper_reject_card = -1;
+static volatile sig_atomic_t hopper_reject_value = 0;
+static volatile sig_atomic_t hopper_reject_is_freq = 0;
+static volatile sig_atomic_t regdom_refresh_pending = 0;
+static volatile sig_atomic_t cached_regdom_self_managed = 0;
+static volatile sig_atomic_t hopper_reject_notice_emitted = 0;
+static volatile sig_atomic_t hopper_refused_values[AIRODUMP_TUI_MAX_CHANNEL_STATUS];
+static volatile sig_atomic_t hopper_refused_is_freq[AIRODUMP_TUI_MAX_CHANNEL_STATUS];
+static volatile sig_atomic_t hopper_refused_count = 0;
+static volatile sig_atomic_t hopper_validated_values[AIRODUMP_TUI_MAX_CHANNEL_STATUS];
+static volatile sig_atomic_t hopper_validated_is_freq[AIRODUMP_TUI_MAX_CHANNEL_STATUS];
+static volatile sig_atomic_t hopper_validated_count = 0;
+static pid_t main_pid = -1;
+enum input_entry_mode
+{
+	INPUT_ENTRY_NONE = 0,
+	INPUT_ENTRY_CHANNEL = 1,
+	INPUT_ENTRY_REGDOM = 2,
+};
+static int channel_entry_active = 0;
+static int channel_entry_mode = INPUT_ENTRY_NONE;
+static char channel_entry_buf[8];
+static char channel_entry_prompt[128];
+static size_t channel_entry_len = 0;
+static char cached_regdom[16];
+static struct wif ** g_wi = NULL;
+static int use_ncurses_tui = 0;
+static volatile sig_atomic_t tui_resize_pending = 0;
+static struct airodump_tui_state tui_state;
+#define BAND_MODE_BG 0
+#define BAND_MODE_A 1
+#define BAND_MODE_AX 2
+#define BAND_MODE_CUSTOM 3
+#define AIRODUMP_TUI_MESSAGE_HISTORY 256
+static struct airodump_tui_message_entry tui_message_history[AIRODUMP_TUI_MESSAGE_HISTORY];
+static size_t tui_message_history_count = 0;
+static char tui_message_history_last[512];
 static void dump_sort(void);
+static int ap_sort_is_live(int sort_by);
 static void dump_print(int ws_row, int ws_col, int if_num);
 static char *
 get_manufacturer(unsigned char mac0, unsigned char mac1, unsigned char mac2);
 int is_filtered_essid(const uint8_t * essid);
+static int launch_deauth(void);
+static int resume_hopper(void);
+static int getchancount(int valid);
+static int getfreqcount(int valid);
+static void channel_hopper(struct wif * wi[], int if_num, int chan_count, pid_t parent);
+static void frequency_hopper(struct wif * wi[], int if_num, int chan_count, pid_t parent);
+static int channel_to_frequency_ax(int channel);
+static int channel_to_frequency(int channel);
+static int channel_to_frequency_for_band_mode(int band_mode, int channel);
+static int frequency_to_channel(int frequency);
+static int band_from_frequency_or_channel(int frequency, int channel);
+static int band_from_rx_info(const struct rx_info * ri, int channel);
+static int channel_is_valid_for_band(int channel);
+static int park_on_channel(int channel);
+static int build_ax_frequency_list(int ** freqs_out);
+static void begin_channel_entry(void);
+static void begin_regdom_entry(void);
+static void cancel_channel_entry(const char * message);
+static int apply_channel_entry(void);
+static int apply_regdom_entry(void);
+static int lock_selected_ap_channel(void);
+static int infer_band_mode(void);
+static int band_support_mask_for_interface(const char * ifname);
+static int band_support_mask_for_cards(struct wif * wi[], int num_cards);
+static int supported_band_mode_mask(void);
+static int band_mode_is_supported(int band_mode);
+static int next_supported_band_mode(int current_band_mode, int direction);
+static void stop_hopper(void);
+static int switch_band(int direction);
+static const char * band_mode_label(int band_mode);
+static int handle_keycode(int keycode);
+static void render_output(void);
+static void render_output_view(int record_message_history);
+static void restore_terminal(void);
+static void record_tui_message_history(void);
+static void append_tui_message_history(const char * message, time_t timestamp);
+static void append_tui_message_history_now(const char * message);
+static int normalize_tui_message(const char * message, char * out, size_t out_len);
+static void reset_hopper_reject_state(void);
+static void reset_hopper_scan_list(void);
+static void update_hopper_reject_message(void);
+static void process_hopper_event(int card, int value);
+static void record_hopper_refused_target(int value, int is_freq);
+static int hopper_target_refused(int value, int is_freq);
+static size_t get_allowed_ax_frequencies(int * freqs, size_t max_freqs);
+static int ax_frequency_in_hopper_list(int frequency);
+static size_t build_channel_status_entries(struct airodump_tui_channel_entry * entries,
+										   size_t max_entries);
+static void set_hopper_pipe_nonblocking(void);
+static int ap_security_std_rank(unsigned int security);
+static int ap_security_cipher_rank(unsigned int security);
+static int ap_security_auth_rank(unsigned int security);
+static int ap_station_count_rank(const struct AP_info * ap);
+static int ap_essid_compare(const struct AP_info * lhs, const struct AP_info * rhs);
+static int ap_band_mode(const struct AP_info * ap);
+static int ensure_band_mode(int band_mode);
+static void set_channel_entry_prompt(void);
+static int set_kernel_regdom(const char * country);
+static int refresh_hopper_after_regdom_change(void);
+static int write_wpa_snapshot(void);
+static int get_active_phy_index(void);
+static int get_kernel_regdom(char * out, size_t out_len, int * self_managed);
+static void cache_kernel_regdom(const char * regdom, int self_managed);
+static const char * get_cached_regdom(int force_refresh);
+static int get_cached_regdom_self_managed(void);
+static void set_message_follow_latest(int follow_latest);
+static int tui_message_pane_visible(void);
+static void set_tui_focus(int focus);
+static int handle_mouse_event(void);
+static struct AP_info * pick_ap_from_mouse(int x, int y);
+static void set_selected_ap(struct AP_info * ap,
+							int selection_direction);
+static void cycle_tui_focus(int direction);
+static char * csv_escape_field(const unsigned char * input, size_t len);
+static void format_probe_timestamp(char * out, size_t out_len, time_t ts);
+static struct probe_log_entry * find_probe_log_entry(const unsigned char * probe,
+													 size_t len);
+static void log_distinct_probe_essid(const struct ST_info * st_cur,
+									 const unsigned char * probe,
+									 size_t len);
+static void free_probe_log_entries(void);
+static int deauth_mfp_guard(struct AP_info * ap_cur);
+static int deauth_is_unassociated_ap(const struct AP_info * ap_cur);
+static void deauth_refuse_with_message(const char * reason);
 
 /* bunch of global stuff */
 struct communication_options opt;
@@ -141,14 +761,10 @@ static struct local_options
 	struct NA_info * na_1st;
 	struct oui * manufList;
 
-	pMAC_t rBSSID;
 	unsigned char prev_bssid[6];
 	char ** f_essid;
 	int f_essid_count;
-#ifdef HAVE_PCRE2
-	pcre2_code * f_essid_regex;
-	pcre2_match_data * f_essid_match_data;
-#elif defined HAVE_PCRE
+#ifdef HAVE_PCRE
 	pcre * f_essid_regex;
 #endif
 	char * dump_prefix;
@@ -180,9 +796,10 @@ static struct local_options
 
 	int * own_channels; /* custom channel list  */
 	int * own_frequencies; /* custom frequency list  */
+	int band_mode; /* current band selection */
+	int band_support_mask; /* cached supported bands across cards (-1 = unknown) */
 
-	int asso_station; /* only show associated stations */
-	int unasso_station; /* only show unassociated stations */
+	int asso_client; /* only show associated clients */
 
 	unsigned char wpa_bssid[6]; /* the wpa handshake bssid   */
 	char message[512];
@@ -190,7 +807,7 @@ static struct local_options
 
 	char is_berlin; /* is the switch --berlin set? */
 	int numaps; /* number of APs on the current list */
-	int maxnumaps; /* maximum numbers of APs on the list */
+	int maxnumaps; /* maximum nubers of APs on the list */
 	int maxaps; /* number of all APs found */
 	int berlin; /* number of seconds it takes in berlin to fill the whole screen
 				   with APs*/
@@ -230,7 +847,6 @@ static struct local_options
 	char * freqstring;
 	int freqoption;
 	int chanoption;
-	int ignore_other_channels;
 	int active_scan_sim; /* simulates an active scan, sending probe requests */
 
 	/* Airodump-ng start time: for kismet netxml file */
@@ -249,10 +865,8 @@ static struct local_options
 		selection_direction_up,
 		selection_direction_no
 	} en_selection_direction;
-	int mark_cur_ap;
 	int num_cards;
 	int do_pause;
-	int do_sort_always;
 
 	pthread_mutex_t mx_print; /* lock write access to ap LL   */
 	pthread_mutex_t mx_sort; /* lock write access to ap LL   */
@@ -272,14 +886,274 @@ static struct local_options
 	int background_mode;
 
 	unsigned long min_pkts;
-	int16_t min_power;
-	int8_t min_rxq;
 
 	int relative_time; /* read PCAP in psuedo-real-time */
+	int scan_11ax;
+	int ppi;
+	double coordinates[2];
+	int target;
+	char ip[INET_ADDRSTRLEN];
+	int port;
+	int tcp_sock_fd;
+	int ax_bw;
+	int c_seg0;
+	int c_seg1;
 
-	int color_on;
-	int color;
+
 } lopt;
+
+static int normalize_tui_message(const char * message, char * out, size_t out_len)
+{
+	size_t used = 0;
+	int pending_space = 0;
+
+	if (message == NULL || out == NULL || out_len == 0) return (0);
+
+	while (*message != '\0'
+		   && (*message == ']' || *message == '[' || isspace((unsigned char) *message)))
+	{
+		message++;
+	}
+	while (*message != '\0' && used + 1 < out_len)
+	{
+		if (isspace((unsigned char) *message))
+		{
+			pending_space = (used > 0);
+		}
+		else
+		{
+			if (pending_space && used + 1 < out_len)
+				out[used++] = ' ';
+			out[used++] = *message;
+			pending_space = 0;
+		}
+		message++;
+	}
+	while (used > 0 && isspace((unsigned char) out[used - 1]))
+		used--;
+	out[used] = '\0';
+	return (used > 0);
+}
+
+static enum airodump_tui_message_style message_style_from_text(const char * message)
+{
+	if (message == NULL) return (AIRODUMP_TUI_MESSAGE_STYLE_DEFAULT);
+
+	if (strstr(message, "Selected AP requires MFP") != NULL
+		|| strstr(message, "Selected AP advertises optional MFP") != NULL)
+	{
+		return (AIRODUMP_TUI_MESSAGE_STYLE_WARNING);
+	}
+
+	if (strstr(message, "PMKID found:") != NULL
+		|| strstr(message, "WPA handshake:") != NULL)
+	{
+		return (AIRODUMP_TUI_MESSAGE_STYLE_SUCCESS);
+	}
+
+	return (AIRODUMP_TUI_MESSAGE_STYLE_DEFAULT);
+}
+
+/* targeting globals*/
+#define MAX_TARGETS 100
+unsigned char targets[MAX_TARGETS][6]; // Array to store MAC addresses
+uint8_t wildcard_nibbles[MAX_TARGETS][12];
+int num_targets = 0; // Number of MAC addresses stored
+
+static int convertMACToBytesWithWildcards(const char *mac_str, uint8_t *mac_bytes, uint8_t *nibble_mask) {
+    if (strlen(mac_str) != 17) return -1;
+
+    for (int i = 0; i < 6; i++) {
+        char c1 = mac_str[i * 3];
+        char c2 = mac_str[i * 3 + 1];
+
+        if (i < 5 && mac_str[i * 3 + 2] != ':') return -1;
+
+        uint8_t high_nibble, low_nibble;
+
+        // High nibble
+        if (c1 == '?') {
+            high_nibble = 0;
+            nibble_mask[i * 2] = 1;
+        } else if (isxdigit(c1)) {
+            high_nibble = (uint8_t)(isdigit(c1) ? c1 - '0' : (tolower(c1) - 'a' + 10));
+            nibble_mask[i * 2] = 0;
+        } else return -1;
+
+        // Low nibble
+        if (c2 == '?') {
+            low_nibble = 0;
+            nibble_mask[i * 2 + 1] = 1;
+        } else if (isxdigit(c2)) {
+            low_nibble = (uint8_t)(isdigit(c2) ? c2 - '0' : (tolower(c2) - 'a' + 10));
+            nibble_mask[i * 2 + 1] = 0;
+        } else return -1;
+
+        mac_bytes[i] = (high_nibble << 4) | low_nibble;
+    }
+
+    return 0;
+}
+
+
+// Function to parse a file for MAC addresses
+static int parseMACAddressFile(const char *filename) {
+    FILE *file = fopen(filename, "r");
+    if (file == NULL) return -1;
+
+    char line[64]; // enough for safety
+    while (fgets(line, sizeof(line), file) != NULL) {
+        line[strcspn(line, "\r\n")] = '\0'; // Trim newline
+
+        if (num_targets >= MAX_TARGETS) break;
+
+        if (convertMACToBytesWithWildcards(line, targets[num_targets], wildcard_nibbles[num_targets]) == 0) {
+            num_targets++;
+        }
+    }
+
+    fclose(file);
+    return 0;
+}
+
+static int isTargetMAC(uint8_t *mac_address) {
+    for (int i = 0; i < num_targets; i++) {
+        int matched = 1;
+        for (int j = 0; j < 6; j++) {
+            uint8_t target_byte = targets[i][j];
+            uint8_t target_high = (target_byte & 0xF0) >> 4;
+            uint8_t target_low = target_byte & 0x0F;
+
+            uint8_t mac_high = (mac_address[j] & 0xF0) >> 4;
+            uint8_t mac_low = mac_address[j] & 0x0F;
+
+            if (!wildcard_nibbles[i][j * 2] && mac_high != target_high) {
+                matched = 0; break;
+            }
+            if (!wildcard_nibbles[i][j * 2 + 1] && mac_low != target_low) {
+                matched = 0; break;
+            }
+        }
+        if (matched) return 1;
+    }
+    return 0;
+}
+
+// Function to validate and store IP and port from user input
+int validate_ip_port(const char *input) {
+    if (!input) return 0;  // Null check
+
+    char temp[INET_ADDRSTRLEN + 6];  // Buffer for IP:PORT (max "255.255.255.255:65535")
+    strncpy(temp, input, sizeof(temp) - 1);
+    temp[sizeof(temp) - 1] = '\0';
+
+    char *ip_part = strtok(temp, ":,");  // Extract IP (supports ":" or "," as delimiter)
+    char *port_part = strtok(NULL, ":,");  // Extract Port
+
+    // Ensure both parts exist
+    if (!ip_part || !port_part) {
+        fprintf(stderr, "Invalid format! Use IP:PORT or IP,PORT\n");
+        return 0;
+    }
+
+    // Validate IP address
+    struct sockaddr_in sa;
+    if (inet_pton(AF_INET, ip_part, &(sa.sin_addr)) != 1) {
+        fprintf(stderr, "Invalid IP address: %s\n", ip_part);
+        return 0;
+    }
+
+    // Validate Port
+    char *endptr;
+    long port = strtol(port_part, &endptr, 10);
+    if (*endptr != '\0' || port < 1 || port > 65535) {
+        fprintf(stderr, "Invalid port number: %s\n", port_part);
+        return 0;
+    }
+
+    // Store valid values in lopt (existing structure)
+    strncpy(lopt.ip, ip_part, INET_ADDRSTRLEN - 1);
+    lopt.ip[INET_ADDRSTRLEN - 1] = '\0';  // Ensure null-termination
+    lopt.port = (int)port;
+
+    return 1;  // Success
+}
+
+// Function to start a TCP server and return the accepted client socket
+int start_tcp_server(const char *ip, int port) {
+    int server_fd, client_fd;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    int opt = 1;
+    char spinner[] = "|/-\\";  // Spinner animation characters
+    int spin_index = 0;
+
+    // Create the server socket
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Socket creation failed");
+        return -1;
+    }
+
+    // Allow immediate reuse of the address and port
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    // Configure the server address
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    
+    // Convert IP address
+    if (inet_pton(AF_INET, ip, &server_addr.sin_addr) <= 0) {
+        perror("Invalid IP address");
+        close(server_fd);
+        return -1;
+    }
+
+    // Bind the socket
+    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Bind failed");
+        close(server_fd);
+        return -1;
+    }
+
+    // Listen for connections
+    if (listen(server_fd, 5) < 0) {
+        perror("Listen failed");
+        close(server_fd);
+        return -1;
+    }
+
+    printf("TCP server listening on %s:%d\n", ip, port);
+
+    // Display a rotating status message on the same line
+    printf("Waiting for a client to connect... ");
+
+    fflush(stdout);  // Ensure output is printed immediately
+
+    // Accept loop with EINTR handling and rotating animation
+    while (1) {
+        printf("\rWaiting for a client to connect... %c", spinner[spin_index]);
+        fflush(stdout);
+        spin_index = (spin_index + 1) % 4;  // Rotate through spinner characters
+        usleep(200000);  // Sleep for 200ms to slow down animation
+
+        client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_len);
+        if (client_fd < 0) {
+            if (errno == EINTR) {
+                continue;  // Retry accept() if interrupted
+            }
+            perror("\nAccept failed");
+            close(server_fd);
+            return -1;
+        }
+        break;  // Exit loop when accept() succeeds
+    }
+
+    printf("\rClient connected!                           \n");  // Clear line
+    close(server_fd);  // Close the listening socket (we only need the client socket)
+    return client_fd;
+}
+
 
 static void resetSelection(void)
 {
@@ -291,16 +1165,331 @@ static void resetSelection(void)
 	lopt.start_print_sta = 1;
 	lopt.p_selected_ap = NULL;
 	lopt.en_selection_direction = selection_direction_no;
-	lopt.mark_cur_ap = 0;
 	lopt.do_pause = 0;
-	lopt.do_sort_always = 0;
 	memset(lopt.selected_bssid, '\x00', 6);
+}
+
+static void format_mac(char * out, size_t out_len, const uint8_t mac[6])
+{
+	snprintf(out,
+			 out_len,
+			 "%02X:%02X:%02X:%02X:%02X:%02X",
+			 mac[0],
+			 mac[1],
+			 mac[2],
+			 mac[3],
+			 mac[4],
+			 mac[5]);
+}
+
+static int launch_deauth(void)
+{
+	struct AP_info * ap_cur;
+	struct ST_info * st_cur;
+	struct wif * wi[MAX_CARDS];
+	char apmac[18];
+	char stmac[18];
+	char wlan_if[64];
+	const char * ifname;
+	int station_count = 0;
+	int i;
+	int new_channel;
+	int new_frequency;
+	int ap_band_mode_value;
+	int status;
+	int launched_any = 0;
+
+	if (lopt.p_selected_ap == NULL)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ no AP selected");
+		append_tui_message_history_now(lopt.message);
+		return (0);
+	}
+
+	ap_cur = lopt.p_selected_ap;
+	format_mac(apmac, sizeof(apmac), ap_cur->bssid);
+
+	if (deauth_is_unassociated_ap(ap_cur))
+	{
+		deauth_refuse_with_message("Selected AP is the unassociated-client entry");
+		return (0);
+	}
+
+	ap_band_mode_value = ap_band_mode(ap_cur);
+	if (!ensure_band_mode(ap_band_mode_value))
+		return (0);
+
+	if (g_wi == NULL || g_wi[0] == NULL)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ no wireless interface available");
+		append_tui_message_history_now(lopt.message);
+		return (0);
+	}
+
+	ifname = wi_get_ifname(g_wi[0]);
+	if (ifname == NULL)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ unable to resolve wireless interface name");
+		append_tui_message_history_now(lopt.message);
+		return (0);
+	}
+
+	strlcpy(wlan_if, ifname, sizeof(wlan_if));
+
+	for (i = 0; i < MAX_CARDS; i++)
+	{
+		wi[i] = NULL;
+	}
+	for (i = 0; i < lopt.num_cards; i++)
+		wi[i] = g_wi[i];
+
+	new_channel = ap_cur->channel;
+	new_frequency = 0;
+	if (hopper_pid > 0)
+		stop_hopper();
+
+	if (lopt.freqoption)
+	{
+		new_frequency = channel_to_frequency_for_band_mode(ap_band_mode_value,
+															ap_cur->channel);
+		if (new_frequency <= 0)
+		{
+			snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ unable to map AP channel to frequency");
+			append_tui_message_history_now(lopt.message);
+			goto restore_state;
+		}
+	}
+
+	lopt.singlechan = 0;
+	lopt.singlefreq = 0;
+
+	for (i = 0; i < lopt.num_cards; i++)
+	{
+		int ret = 0;
+
+		if (lopt.freqoption)
+		{
+#ifdef CONFIG_LIBNL
+			ret = wi_set_freq_ax(wi[i],
+								 new_frequency,
+								 lopt.ax_bw,
+								 lopt.c_seg0,
+								 lopt.c_seg1);
+#else
+			ret = wi_set_freq(wi[i], new_frequency);
+#endif
+			if (ret != 0)
+			{
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ failed to tune %s to AP frequency",
+						 wi_get_ifname(wi[i]));
+				append_tui_message_history_now(lopt.message);
+				goto restore_state;
+			}
+			lopt.frequency[i] = new_frequency;
+		}
+		else
+		{
+#ifdef CONFIG_LIBNL
+			ret = wi_set_ht_channel(wi[i], new_channel, lopt.htval);
+#else
+			ret = wi_set_channel(wi[i], new_channel);
+#endif
+			if (ret != 0)
+			{
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ failed to tune %s to AP channel",
+						 wi_get_ifname(wi[i]));
+				append_tui_message_history_now(lopt.message);
+				goto restore_state;
+			}
+			lopt.channel[i] = new_channel;
+		}
+	}
+
+	st_cur = lopt.st_1st;
+	while (st_cur != NULL)
+	{
+		if (time(NULL) - st_cur->tlast <= lopt.berlin && st_cur->base == ap_cur)
+		{
+			station_count++;
+		}
+		st_cur = st_cur->next;
+	}
+
+	if (station_count == 0)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ No stations for selected AP");
+		append_tui_message_history_now(lopt.message);
+		goto restore_state;
+	}
+
+	snprintf(lopt.message,
+			 sizeof(lopt.message),
+			 "][ running aireplay-ng for %d station%s",
+			 station_count,
+			 (station_count == 1) ? "" : "s");
+	append_tui_message_history_now(lopt.message);
+	launched_any = 1;
+
+	st_cur = lopt.st_1st;
+	while (st_cur != NULL)
+	{
+		if (time(NULL) - st_cur->tlast <= lopt.berlin && st_cur->base == ap_cur)
+		{
+			int pipefd[2];
+			pid_t child_pid;
+
+			format_mac(stmac, sizeof(stmac), st_cur->stmac);
+			snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ aireplay-ng %s",
+					 stmac);
+			append_tui_message_history_now(lopt.message);
+
+			if (pipe(pipefd) < 0)
+			{
+				perror("pipe");
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ failed to capture aireplay-ng output");
+				append_tui_message_history_now(lopt.message);
+				goto restore_state;
+			}
+
+			child_pid = fork();
+			if (child_pid < 0)
+			{
+				perror("fork");
+				close(pipefd[0]);
+				close(pipefd[1]);
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ failed to launch aireplay-ng");
+				append_tui_message_history_now(lopt.message);
+				goto restore_state;
+			}
+
+			if (child_pid == 0)
+			{
+				int null_fd;
+
+				setsid();
+				close(pipefd[0]);
+				null_fd = open("/dev/null", O_RDONLY);
+				if (null_fd >= 0)
+				{
+					if (dup2(null_fd, STDIN_FILENO) < 0)
+					{
+						perror("dup2");
+						_exit(127);
+					}
+					close(null_fd);
+				}
+				if (dup2(pipefd[1], STDOUT_FILENO) < 0
+					|| dup2(pipefd[1], STDERR_FILENO) < 0)
+				{
+					perror("dup2");
+					_exit(127);
+				}
+				close(pipefd[1]);
+				execlp("aireplay-ng",
+					   "aireplay-ng",
+					   "-0",
+					   "5",
+					   "-a",
+					   apmac,
+					   "-c",
+					   stmac,
+					   wlan_if,
+					   (char *) NULL);
+				perror("aireplay-ng");
+				_exit(127);
+			}
+
+			close(pipefd[1]);
+			{
+				char read_buf[512];
+				char line_buf[1024];
+				size_t line_len = 0;
+				ssize_t nread;
+
+				while ((nread = read(pipefd[0], read_buf, sizeof(read_buf))) > 0)
+				{
+					ssize_t i;
+
+					for (i = 0; i < nread; i++)
+					{
+						unsigned char ch = (unsigned char) read_buf[i];
+
+						if (ch == '\n' || ch == '\r')
+						{
+							if (line_len > 0)
+							{
+								line_buf[line_len] = '\0';
+								append_tui_message_history_now(line_buf);
+								line_len = 0;
+							}
+							continue;
+						}
+
+						if (line_len + 1 >= sizeof(line_buf))
+						{
+							line_buf[line_len] = '\0';
+							append_tui_message_history_now(line_buf);
+							line_len = 0;
+						}
+
+						line_buf[line_len++] = (char) ch;
+					}
+				}
+
+				if (line_len > 0)
+				{
+					line_buf[line_len] = '\0';
+					append_tui_message_history_now(line_buf);
+				}
+			}
+
+			close(pipefd[0]);
+			while (waitpid(child_pid, &status, 0) < 0)
+			{
+				if (errno != EINTR)
+					break;
+			}
+		}
+		st_cur = st_cur->next;
+	}
+
+restore_state:
+	snprintf(lopt.message,
+			 sizeof(lopt.message),
+			 "][ deauth complete");
+	append_tui_message_history_now(lopt.message);
+
+	lopt.singlechan = lopt.freqoption ? 0 : 1;
+	lopt.singlefreq = lopt.freqoption ? 1 : 0;
+
+	return (launched_any);
 }
 
 static void color_off(void)
 {
 	struct AP_info * ap_cur;
 
+	colors_enabled = 0;
 	ap_cur = lopt.ap_1st;
 	while (ap_cur != NULL)
 	{
@@ -317,39 +1506,17 @@ static void color_on(void)
 {
 	struct AP_info * ap_cur;
 	struct ST_info * st_cur;
-	int i;
-	int match;
+	int color = 2;
+
+	color_off();
+	colors_enabled = 1;
 
 	ap_cur = lopt.ap_end;
 
 	while (ap_cur != NULL)
 	{
-		// Don't filter unassociated stations by number of packets
-		if (memcmp(ap_cur->bssid, BROADCAST, 6) != 0
-			&& ap_cur->nb_pkt < lopt.min_pkts)
-		{
-			ap_cur = ap_cur->prev;
-			continue;
-		}
-
-		if (time(NULL) - ap_cur->tlast > lopt.berlin)
-		{
-			ap_cur = ap_cur->prev;
-			continue;
-		}
-
-		// Don't filter unassociated stations by power
-		if (memcmp(ap_cur->bssid, BROADCAST, 6) != 0
-			&& ap_cur->avg_power < (int) lopt.min_power)
-		{
-			ap_cur = ap_cur->prev;
-			continue;
-		}
-
-		// Don't filter unassociated stations by RXQ
-		if (memcmp(ap_cur->bssid, BROADCAST, 6) != 0
-			&& ((lopt.singlechan || lopt.singlefreq)
-				&& (ap_cur->rx_quality < (int) lopt.min_rxq)))
+		if (ap_cur->nb_pkt < lopt.min_pkts
+			|| time(NULL) - ap_cur->tlast > lopt.berlin)
 		{
 			ap_cur = ap_cur->prev;
 			continue;
@@ -362,34 +1529,12 @@ static void color_on(void)
 			continue;
 		}
 
-		// Don't filter unassociated stations by ESSID
+		// Don't filter unassociated clients by ESSID
 		if (memcmp(ap_cur->bssid, BROADCAST, 6) != 0
 			&& is_filtered_essid(ap_cur->essid))
 		{
 			ap_cur = ap_cur->prev;
 			continue;
-		}
-
-		// Don't filter unassociated stations by channel
-		if (memcmp(ap_cur->bssid, BROADCAST, 6) != 0 && lopt.chanoption
-			&& lopt.ignore_other_channels)
-		{
-			i = 0;
-			match = 0;
-			while (lopt.own_channels[i])
-			{
-				if (ap_cur->channel == lopt.own_channels[i])
-				{
-					match = 1;
-					break;
-				}
-				i++;
-			}
-			if (match != 1)
-			{
-				ap_cur = ap_cur->prev;
-				continue;
-			}
 		}
 
 		st_cur = lopt.st_end;
@@ -403,16 +1548,13 @@ static void color_on(void)
 				continue;
 			}
 
-			if (((memcmp(ap_cur->bssid, BROADCAST, 6) == 0)
-				 && lopt.asso_station)
-				|| ((memcmp(ap_cur->bssid, BROADCAST, 6) != 0)
-					&& lopt.unasso_station))
+			if (!memcmp(ap_cur->bssid, BROADCAST, 6) && lopt.asso_client)
 			{
 				st_cur = st_cur->prev;
 				continue;
 			}
 
-			if (lopt.color > TEXT_MAX_COLOR) lopt.color++;
+			if (color > TEXT_MAX_COLOR) color++;
 
 			if (!ap_cur->marked)
 			{
@@ -420,7 +1562,7 @@ static void color_on(void)
 				if (!memcmp(ap_cur->bssid, BROADCAST, 6))
 					ap_cur->marked_color = 1;
 				else
-					ap_cur->marked_color = lopt.color++;
+					ap_cur->marked_color = color++;
 			}
 
 			st_cur = st_cur->prev;
@@ -436,258 +1578,13 @@ static THREAD_ENTRY(input_thread)
 
 	while (lopt.do_exit == 0)
 	{
-		int keycode = 0;
+		int keycode = mygetch();
 
-		keycode = mygetch();
-
-		if (keycode == KEY_q)
-		{
-			quitting_event_ts = time(NULL);
-
-			if (++quitting > 1) //-V1051
-				lopt.do_exit = 1;
-			else
-				snprintf(
-					lopt.message,
-					sizeof(lopt.message),
-					"][ Are you sure you want to quit? Press Q again to quit.");
-		}
-
-		if ((keycode == KEY_o) || (lopt.color_on == 1))
-		{
-			color_on();
-
-			if (keycode == KEY_o)
-			{
-				// display message only once (when key 'o' is pressed)
-				snprintf(lopt.message, sizeof(lopt.message), "][ color on");
-				lopt.color_on = 1;
-			}
-		}
-
-		if (keycode == KEY_p)
-		{
-			color_off();
-			snprintf(lopt.message, sizeof(lopt.message), "][ color off");
-			lopt.color_on = 0;
-			// reset color (if color is enabled again it starts again from green)
-			lopt.color = TEXT_GREEN;
-		}
-
-		if (keycode == KEY_s)
-		{
-			lopt.sort_by++;
-
-			if (lopt.sort_by > MAX_SORT) lopt.sort_by = 0;
-
-			switch (lopt.sort_by)
-			{
-				case SORT_BY_NOTHING:
-					snprintf(lopt.message,
-							 sizeof(lopt.message),
-							 "][ sorting by first seen");
-					break;
-				case SORT_BY_BSSID:
-					snprintf(lopt.message,
-							 sizeof(lopt.message),
-							 "][ sorting by bssid");
-					break;
-				case SORT_BY_POWER:
-					snprintf(lopt.message,
-							 sizeof(lopt.message),
-							 "][ sorting by power level");
-					break;
-				case SORT_BY_BEACON:
-					snprintf(lopt.message,
-							 sizeof(lopt.message),
-							 "][ sorting by beacon number");
-					break;
-				case SORT_BY_DATA:
-					snprintf(lopt.message,
-							 sizeof(lopt.message),
-							 "][ sorting by number of data packets");
-					break;
-				case SORT_BY_PRATE:
-					snprintf(lopt.message,
-							 sizeof(lopt.message),
-							 "][ sorting by packet rate");
-					break;
-				case SORT_BY_CHAN:
-					snprintf(lopt.message,
-							 sizeof(lopt.message),
-							 "][ sorting by channel");
-					break;
-				case SORT_BY_MBIT:
-					snprintf(lopt.message,
-							 sizeof(lopt.message),
-							 "][ sorting by max data rate");
-					break;
-				case SORT_BY_ENC:
-					snprintf(lopt.message,
-							 sizeof(lopt.message),
-							 "][ sorting by encryption");
-					break;
-				case SORT_BY_CIPHER:
-					snprintf(lopt.message,
-							 sizeof(lopt.message),
-							 "][ sorting by cipher");
-					break;
-				case SORT_BY_AUTH:
-					snprintf(lopt.message,
-							 sizeof(lopt.message),
-							 "][ sorting by authentication");
-					break;
-				case SORT_BY_ESSID:
-					snprintf(lopt.message,
-							 sizeof(lopt.message),
-							 "][ sorting by ESSID");
-					break;
-				default:
-					break;
-			}
-			ALLEGE(pthread_mutex_lock(&(lopt.mx_sort)) == 0);
-			dump_sort();
-			ALLEGE(pthread_mutex_unlock(&(lopt.mx_sort)) == 0);
-		}
-
-		if (keycode == KEY_SPACE)
-		{
-			lopt.do_pause = (lopt.do_pause + 1) % 2;
-			if (lopt.do_pause)
-			{
-				snprintf(
-					lopt.message, sizeof(lopt.message), "][ paused output");
-				ALLEGE(pthread_mutex_lock(&(lopt.mx_print)) == 0);
-
-				dump_print(lopt.ws.ws_row, lopt.ws.ws_col, lopt.num_cards);
-
-				ALLEGE(pthread_mutex_unlock(&(lopt.mx_print)) == 0);
-			}
-			else
-				snprintf(
-					lopt.message, sizeof(lopt.message), "][ resumed output");
-		}
-
-		if (keycode == KEY_r)
-		{
-			lopt.do_sort_always = (lopt.do_sort_always + 1) % 2;
-			if (lopt.do_sort_always)
-				snprintf(lopt.message,
-						 sizeof(lopt.message),
-						 "][ realtime sorting activated");
-			else
-				snprintf(lopt.message,
-						 sizeof(lopt.message),
-						 "][ realtime sorting deactivated");
-		}
-
-		if (keycode == KEY_m)
-		{
-			if (lopt.p_selected_ap != NULL)
-			{
-				lopt.mark_cur_ap = 1;
-			}
-		}
-
-		if (keycode == KEY_ARROW_DOWN)
-		{
-			if (lopt.p_selected_ap && lopt.p_selected_ap->prev)
-			{
-				lopt.p_selected_ap = lopt.p_selected_ap->prev;
-				lopt.en_selection_direction = selection_direction_down;
-			}
-		}
-
-		if (keycode == KEY_ARROW_UP)
-		{
-			if (lopt.p_selected_ap && lopt.p_selected_ap->next)
-			{
-				lopt.p_selected_ap = lopt.p_selected_ap->next;
-				lopt.en_selection_direction = selection_direction_up;
-			}
-		}
-
-		if (keycode == KEY_i)
-		{
-			lopt.sort_inv *= -1;
-			if (lopt.sort_inv < 0)
-				snprintf(lopt.message,
-						 sizeof(lopt.message),
-						 "][ inverted sorting order");
-			else
-				snprintf(lopt.message,
-						 sizeof(lopt.message),
-						 "][ normal sorting order");
-		}
-
-		if (keycode == KEY_TAB)
-		{
-			if (lopt.p_selected_ap == NULL)
-			{
-				lopt.p_selected_ap = lopt.ap_end;
-				lopt.en_selection_direction = selection_direction_down;
-				snprintf(lopt.message,
-						 sizeof(lopt.message),
-						 "][ enabled AP selection");
-			}
-			else
-			{
-				lopt.en_selection_direction = selection_direction_no;
-				lopt.p_selected_ap = NULL;
-				snprintf(lopt.message,
-						 sizeof(lopt.message),
-						 "][ disabled selection");
-			}
-		}
-
-		if (keycode == KEY_a)
-		{
-			if (lopt.show_ap == 1 && lopt.show_sta == 1 && lopt.show_ack == 0)
-			{
-				lopt.show_ack = 1;
-				snprintf(lopt.message,
-						 sizeof(lopt.message),
-						 "][ display ap+sta+ack");
-			}
-			else if (lopt.show_ap == 1 && lopt.show_sta == 1
-					 && lopt.show_ack == 1)
-			{
-				lopt.show_sta = 0;
-				lopt.show_ack = 0;
-				snprintf(
-					lopt.message, sizeof(lopt.message), "][ display ap only");
-			}
-			else if (lopt.show_ap == 1 && lopt.show_sta == 0
-					 && lopt.show_ack == 0)
-			{
-				lopt.show_ap = 0;
-				lopt.show_sta = 1;
-				snprintf(
-					lopt.message, sizeof(lopt.message), "][ display sta only");
-			}
-			else if (lopt.show_ap == 0 && lopt.show_sta == 1
-					 && lopt.show_ack == 0)
-			{
-				lopt.show_ap = 1;
-				snprintf(
-					lopt.message, sizeof(lopt.message), "][ display ap+sta");
-			}
-		}
-
-		if (keycode == KEY_d)
-		{
-			resetSelection();
-			snprintf(lopt.message,
-					 sizeof(lopt.message),
-					 "][ reset selection to default");
-		}
-
-		if (lopt.do_exit == 0 && !lopt.do_pause)
+		if (handle_keycode(keycode) && !use_ncurses_tui && lopt.do_exit == 0
+			&& !lopt.do_pause)
 		{
 			ALLEGE(pthread_mutex_lock(&(lopt.mx_print)) == 0);
-
-			dump_print(lopt.ws.ws_row, lopt.ws.ws_col, lopt.num_cards);
-
+			render_output();
 			ALLEGE(pthread_mutex_unlock(&(lopt.mx_print)) == 0);
 		}
 	}
@@ -809,7 +1706,10 @@ static const char usage[] =
 	"  Options:\n"
 	"      --ivs                 : Save only captured IVs\n"
 	"      --gpsd                : Use GPSd\n"
-	"      --write      <prefix> : Dump file prefix\n"
+	"      -w / --write <prefix> : Dump file prefix\n"
+	"      -w                    : same as --write \n"
+	"      -p / --ppi            : Create pcap PPI headers with radiotap/gps tags\n"
+	"      -y / --coords         : Provide fixed coordinates for ppi geo tags. Use with --ppi option.\n"
 	"      --beacons             : Record all beacons in dump file\n"
 	"      --update       <secs> : Display update delay in seconds\n"
 	"      --showack             : Prints ack/cts/rts statistics\n"
@@ -819,59 +1719,85 @@ static const char usage[] =
 	"                              from the screen when no more packets\n"
 	"                              are received (Default: 120 seconds)\n"
 	"      -r             <file> : Read packets from that file\n"
-	"      --real-time           : While reading packets from a file,\n"
+	"      -T                    : While reading packets from a file,\n"
 	"                              simulate the arrival rate of them\n"
 	"                              as if they were \"live\".\n"
 	"      -x            <msecs> : Active Scanning Simulation\n"
 	"      --manufacturer        : Display manufacturer from IEEE OUI list\n"
 	"      --uptime              : Display AP Uptime from Beacon Timestamp\n"
 	"      --wps                 : Display WPS information (if any)\n"
-	"      --output-format\n"
+	"      -o / --output-format\n"
 	"                  <formats> : Output format. Possible values:\n"
 	"                              pcap, ivs, csv, gps, kismet, netxml, "
 	"logcsv\n"
+	"      -P / --probes         : Log probe sightings to a live CSV file\n"
 	"      --ignore-negative-one : Removes the message that says\n"
 	"                              fixed channel <interface>: -1\n"
 	"      --write-interval\n"
 	"                  <seconds> : Output file(s) write interval in seconds\n"
 	"      --background <enable> : Override background detection.\n"
+	"      -n              <int> : Minimum AP packets recv'd before\n"
+	"                              for displaying it\n"
+	"      -z / --target \n"
+	"              <mac or file> : Enter a target mac to highlight\n"
+	"                              or pass a file of newline separated macs\n"
+	"      -V / --tcp-server\n"
+	"              <ip:port>     : Enter an IPv4 listen address and \n"
+	"              <ip,port>       valid port number. Requires -w / --write option\n"
 	"\n"
 	"  Filter options:\n"
-	"      --encrypt   <suite>   : Filter APs by cipher suite,\n"
-	"                              you can pass multiple --encrypt options\n"
-	"      --netmask <netmask>   : Filter APs by mask\n"
-	"      --bssid     <bssid>   : Filter APs by BSSID,\n"
-	"                              you can pass multiple --bssid options\n"
-	"      --essid     <essid>   : Filter APs by ESSID,\n"
-	"                              you can pass multiple --essid options\n"
-#if defined HAVE_PCRE2 || defined HAVE_PCRE
+	"      --encrypt     <suite> : Filter APs by cipher suite\n"
+	"      --netmask   <netmask> : Filter APs by mask\n"
+	"      --bssid       <bssid> : Filter APs by BSSID\n"
+	"      --essid       <essid> : Filter APs by ESSID\n"
+#ifdef HAVE_PCRE
 	"      --essid-regex <regex> : Filter APs by ESSID using a regular\n"
 	"                              expression\n"
 #endif
-	"      --min-packets   <int> : Minimum AP packets recv'd before\n"
-	"                              displaying it (default: 2)\n"
-	"      --min-power     <int> : Filter out APs with PWR less than\n"
-	"                              the specified value (default: -120)\n"
-	"      --min-rxq       <int> : Filter out APs with RXQ less than\n"
-	"                              the specified value (default: 0)\n"
-	"                              Requires --channel (or -c) or -C\n"
-	"      -a                    : Filter out unassociated stations\n"
-	"      -z                    : Filter out associated stations\n"
+	"      -a                    : Filter unassociated clients\n"
 	"\n"
 	"  By default, airodump-ng hops on 2.4GHz channels.\n"
 	"  You can make it capture on other/specific channel(s) by using:\n"
 	"      --ht20                : Set channel to HT20 (802.11n)\n"
 	"      --ht40-               : Set channel to HT40- (802.11n)\n"
 	"      --ht40+               : Set channel to HT40+ (802.11n)\n"
-	"      --channel <channels>  : Capture on specific channels\n"
-	"      --ignore-other-chans  : Filter out other channels\n"
-	"                              Requires --channel (or -c)\n"
-	"      --band <abg>          : Band on which airodump-ng should hop\n"
-	"      -C    <frequencies>   : Uses these frequencies in MHz to hop\n"
+	"      --ax40                : Set channel to 40 MHz bandwidth (802.11ax)\n"
+	"      --ax80                : Set channel to 80 MHz bandwidth (802.11ax)\n"
+	"      --ax80+               : Set channel to 80+80 MHz bandwidth (802.11ax)\n"
+	"      --ax160               : Set channel to 160 MHz bandwidth (802.11ax)\n"
+	"      --cseg0        <freq> : Center Segement 0 - for 40, 80, and 160 MHz secondary frequencies (802.11ax)\n"
+	"      --cseg1        <freq> : Center Segement 1 - for 80+80 MHz secondary frequency (802.11ax)\n"
+	"      -X / --80211ax        : Capture on 802.11ax 6E channels. Must use -c with 6E channel number\n"
+	"      -c / --channel <chs>  : Capture on specific channels\n"
+	"      -b / --band   <abgx>  : Band on which airodump-ng should hop\n"
+	"      -C     <frequencies>  : Uses these frequencies in MHz to hop\n"
 	"      --cswitch  <method>   : Set channel switching method\n"
 	"                    0       : FIFO (default)\n"
 	"                    1       : Round Robin\n"
 	"                    2       : Hop on last\n"
+	"      -s                    : same as --cswitch\n"
+	"\n"
+	"  Interactive TUI controls:\n"
+	"      ? / F1                : Show or close help\n"
+	"      Tab / Left / Right    : Switch focused pane\n"
+	"      Arrows/PgUp/PgDn/Home/End: Scroll focused pane\n"
+	"      Mouse wheel           : Scroll pane under pointer\n"
+	"      Mouse click header    : Sort by column\n"
+	"      s / S                 : Cycle sort field next / previous\n"
+	"      b / B                 : Switch band next / previous\n"
+	"      v                     : Show channel availability for active band\n"
+	"      g                     : Set regulatory domain\n"
+	"      w                     : Write buffered WPA/PMKID snapshot\n"
+	"      t                     : Tune channel and stop hopping\n"
+	"      l                     : Lock to selected AP channel\n"
+	"      r                     : Resume channel hopping\n"
+	"      d                     : Deauth selected AP's stations\n"
+	"      i                     : Invert sort order\n"
+	"      c                     : Clear AP filter\n"
+	"      o                     : Toggle colors\n"
+	"      M                     : Toggle mouse capture\n"
+	"      Hopper warnings       : Driver refused a channel/frequency; try b/B for band\n"
+	"      q                     : Quit\n"
 	"\n"
 	"      --help                : Displays this usage screen\n"
 	"\n";
@@ -891,25 +1817,17 @@ static int is_filtered_netmask(const uint8_t * bssid)
 	unsigned char mac1[6];
 	unsigned char mac2[6];
 	int i;
-	pMAC_t cur = lopt.rBSSID;
-	unsigned char match = 0;
 
-	while (cur->next != NULL)
+	for (i = 0; i < 6; i++)
 	{
-		cur = cur->next;
-		for (i = 0; i < 6; i++)
-		{
-			mac1[i] = bssid[i] & opt.f_netmask[i];
-			mac2[i] = cur->mac[i] & opt.f_netmask[i];
-		}
-
-		if (memcmp(mac1, mac2, 6) == 0)
-		{
-			match = 1;
-			break;
-		}
+		mac1[i] = bssid[i] & opt.f_netmask[i];
+		mac2[i] = opt.f_bssid[i] & opt.f_netmask[i];
 	}
-	if (match != 1) return (1);
+
+	if (memcmp(mac1, mac2, 6) != 0)
+	{
+		return (1);
+	}
 
 	return (0);
 }
@@ -934,22 +1852,18 @@ int is_filtered_essid(const uint8_t * essid)
 		ret = 1;
 	}
 
-#if defined HAVE_PCRE2 || defined HAVE_PCRE
+#ifdef HAVE_PCRE
 	if (lopt.f_essid_regex)
 	{
-#ifdef HAVE_PCRE2
-		lopt.f_essid_match_data
-			= pcre2_match_data_create_from_pattern(lopt.f_essid_regex, NULL);
-
-		return COMPAT_PCRE_MATCH(lopt.f_essid_regex,
-								 essid,
-								 ESSID_LENGTH,
-								 lopt.f_essid_match_data)
+		return pcre_exec(lopt.f_essid_regex,
+						 NULL,
+						 (char *) essid,
+						 (int) strnlen((char *) essid, ESSID_LENGTH),
+						 0,
+						 0,
+						 NULL,
+						 0)
 			   < 0;
-#elif defined HAVE_PCRE
-		return COMPAT_PCRE_MATCH(lopt.f_essid_regex, essid, ESSID_LENGTH, NULL)
-			   < 0;
-#endif
 	}
 #endif
 
@@ -984,23 +1898,20 @@ static void update_rx_quality(void)
 			if (ap_cur->fcapt > 1)
 			{
 				capt_time
-					= (1000000UL
-						   * (ap_cur->ftimel.tv_sec
-							  - ap_cur->ftimef.tv_sec) // time between
+					= (1000000UL * (ap_cur->ftimel.tv_sec
+									- ap_cur->ftimef.tv_sec) // time between
 					   // first and last
 					   // captured frame
 					   + (ap_cur->ftimel.tv_usec - ap_cur->ftimef.tv_usec));
 
 				miss_time
-					= (1000000UL
-						   * (ap_cur->ftimef.tv_sec
-							  - ap_cur->ftimer.tv_sec) // time between
+					= (1000000UL * (ap_cur->ftimef.tv_sec
+									- ap_cur->ftimer.tv_sec) // time between
 					   // timer reset and
 					   // first frame
 					   + (ap_cur->ftimef.tv_usec - ap_cur->ftimer.tv_usec))
-					  + (1000000UL
-							 * (cur_time.tv_sec
-								- ap_cur->ftimel.tv_sec) // time between
+					  + (1000000UL * (cur_time.tv_sec
+									  - ap_cur->ftimel.tv_sec) // time between
 						 // last frame and
 						 // this moment
 						 + (cur_time.tv_usec - ap_cur->ftimel.tv_usec));
@@ -1312,8 +2223,10 @@ static int dump_add_packet(unsigned char * h80211,
 	unsigned char clear[2048];
 	int weight[16];
 	int num_xor = 0;
-	pMAC_t cur = lopt.rBSSID;
-	unsigned char match = 0;
+
+	size_t ppi_header_len = 0;
+	uint8_t *packet_data = NULL;  // Ensure it's NULL initially
+	size_t total_packet_size = 0; // Set to 0 to avoid uninitialized usage
 
 	struct AP_info * ap_cur = NULL;
 	struct ST_info * st_cur = NULL;
@@ -1361,7 +2274,7 @@ static int dump_add_packet(unsigned char * h80211,
 			abort();
 	}
 
-	if (getMACcount(lopt.rBSSID) > 0)
+	if (memcmp(opt.f_bssid, NULL_MAC, 6) != 0)
 	{
 		if (memcmp(opt.f_netmask, NULL_MAC, 6) != 0)
 		{
@@ -1369,16 +2282,7 @@ static int dump_add_packet(unsigned char * h80211,
 		}
 		else
 		{
-			while (cur->next != NULL)
-			{
-				cur = cur->next;
-				if (memcmp(cur->mac, bssid, 6) == 0)
-				{
-					match = 1;
-					break;
-				}
-			}
-			if (match != 1) return (1);
+			if (memcmp(opt.f_bssid, bssid, 6) != 0) return (1);
 		}
 	}
 
@@ -1433,7 +2337,9 @@ static int dump_add_packet(unsigned char * h80211,
 		for (i = 0; i < NB_PWR; i++) ap_cur->power_lvl[i] = -1;
 
 		ap_cur->channel = -1;
+		ap_cur->band = 0;
 		ap_cur->max_speed = -1;
+		ap_cur->bss_load_station_count = -1;
 		ap_cur->security = 0;
 
 		ap_cur->ivbuf = NULL;
@@ -1498,6 +2404,13 @@ static int dump_add_packet(unsigned char * h80211,
 		ap_cur->ac_channel.mhz_160_chan = 0;
 		ap_cur->ac_channel.wave_2 = 0;
 		memset(ap_cur->ac_channel.mcs_index, 0, MAX_AC_MCS_INDEX);
+
+		/* 802.11ax */
+		ap_cur->ax_channel.center_sgmt[0] = 0;
+		ap_cur->ax_channel.center_sgmt[1] = 0;
+		ap_cur->ax_channel.split_chan = 0;
+		ap_cur->ax_channel.mhz_160_chan = 0;
+
 	}
 
 	/* update the last time seen */
@@ -1674,9 +2587,10 @@ static int dump_add_packet(unsigned char * h80211,
 		st_cur->probe_index = -1;
 		st_cur->missed = 0;
 		st_cur->lastseq = 0;
-		st_cur->qos_fr_ds = 0;
-		st_cur->qos_to_ds = 0;
-		st_cur->channel = 0;
+	st_cur->qos_fr_ds = 0;
+	st_cur->qos_to_ds = 0;
+	st_cur->channel = 0;
+	st_cur->band = 0;
 
 		gettimeofday(&(st_cur->ftimer), NULL);
 
@@ -1732,6 +2646,7 @@ static int dump_add_packet(unsigned char * h80211,
 			st_cur->channel = ri->ri_channel;
 		else
 			st_cur->channel = lopt.channel[cardnum];
+		st_cur->band = band_from_rx_info(ri, st_cur->channel);
 
 		if (lopt.gps_loc[0] > st_cur->gps_loc_max[0])
 			st_cur->gps_loc_max[0] = lopt.gps_loc[0];
@@ -1785,6 +2700,10 @@ skip_station:
 				for (i = 0; i < n; i++)
 					if (p[2 + i] > 0 && p[2 + i] < ' ') goto skip_probe;
 
+				log_distinct_probe_essid(st_cur,
+										 (const unsigned char *) (p + 2),
+										 (size_t) n);
+
 				/* got a valid ASCII probed ESSID, check if it's
 				   already in the ring buffer */
 
@@ -1807,6 +2726,7 @@ skip_station:
 						if (c < 32) c = '.';
 						st_cur->probes[st_cur->probe_index][i] = c;
 					}
+
 			}
 
 			p += 2 + p[1];
@@ -1914,6 +2834,7 @@ skip_probe:
 			if (p[0] == 0x03)
 			{
 				ap_cur->channel = p[2];
+				ap_cur->band = band_from_rx_info(ri, ap_cur->channel);
 			}
 			else if (p[0] == 0x3d)
 			{
@@ -1924,6 +2845,7 @@ skip_probe:
 
 				/* also get the channel from ht information->primary channel */
 				ap_cur->channel = p[2];
+				ap_cur->band = band_from_rx_info(ri, ap_cur->channel);
 
 				// Get channel width and secondary channel
 				switch (p[3] % 4)
@@ -1977,7 +2899,7 @@ skip_probe:
 						break;
 				}
 
-				ap_cur->n_channel.any_chan_width = (uint8_t) ((p[3] / 4) % 2);
+				ap_cur->n_channel.any_chan_width = (uint8_t)((p[3] / 4) % 2);
 			}
 
 			// HT capabilities
@@ -1989,8 +2911,8 @@ skip_probe:
 				}
 
 				// Short GI for 20/40MHz
-				ap_cur->n_channel.short_gi_20 = (uint8_t) ((p[3] / 32) % 2);
-				ap_cur->n_channel.short_gi_40 = (uint8_t) ((p[3] / 64) % 2);
+				ap_cur->n_channel.short_gi_20 = (uint8_t)((p[3] / 32) % 2);
+				ap_cur->n_channel.short_gi_40 = (uint8_t)((p[3] / 64) % 2);
 
 				// Parse MCS rate
 				/*
@@ -2022,18 +2944,18 @@ skip_probe:
 				// Standard is AC
 				strcpy(ap_cur->standard, "ac");
 
-				ap_cur->ac_channel.split_chan = (uint8_t) ((p[3] / 4) % 4);
+				ap_cur->ac_channel.split_chan = (uint8_t)((p[3] / 4) % 4);
 
-				ap_cur->ac_channel.short_gi_80 = (uint8_t) ((p[3] / 32) % 2);
-				ap_cur->ac_channel.short_gi_160 = (uint8_t) ((p[3] / 64) % 2);
+				ap_cur->ac_channel.short_gi_80 = (uint8_t)((p[3] / 32) % 2);
+				ap_cur->ac_channel.short_gi_160 = (uint8_t)((p[3] / 64) % 2);
 
-				ap_cur->ac_channel.mu_mimo = (uint8_t) ((p[4] & 0x18) % 2);
+				ap_cur->ac_channel.mu_mimo = (uint8_t)((p[4] & 0x18) % 2);
 
 				// A few things indicate Wave 2: MU-MIMO, 80+80 Channels
 				ap_cur->ac_channel.wave_2
-					= (uint8_t) ((ap_cur->ac_channel.mu_mimo
-								  || ap_cur->ac_channel.split_chan)
-								 % 2);
+					= (uint8_t)((ap_cur->ac_channel.mu_mimo
+								 || ap_cur->ac_channel.split_chan)
+								% 2);
 
 				// Maximum rates (16 bit)
 				uint16_t tx_mcs = 0;
@@ -2043,7 +2965,7 @@ skip_probe:
 				for (uint8_t stream_idx = 0; stream_idx < MAX_AC_MCS_INDEX;
 					 ++stream_idx)
 				{
-					uint8_t mcs = (uint8_t) (tx_mcs % 4);
+					uint8_t mcs = (uint8_t)(tx_mcs % 4);
 
 					// Unsupported -> No more spatial stream
 					if (mcs == 3)
@@ -2106,8 +3028,93 @@ skip_probe:
 				ap_cur->ac_channel.center_sgmt[1] = p[4];
 			}
 
+			// Ext tag
+			if (p[0] == 0xff)
+			{
+				/*IEEE Std 802.11ax-2021
+				  Figure 9-788k—6 GHz Operation Information field format
+				  | Primary Channel | Control | Ch. Center Freq. Seg. 0 | Ch. Center Freq. Seg. 1 | Min. Rate |
+			Octets 			1			 1					1						1					1
+			
+				  Figure 9-788l—Control field format
+				  	B0		B1			B2			B3	B5		B6	B7
+				  | Ch. Width | Duplicate Beacon | Reg. Info | Reserv. |	
+			Bits		2				1				3		  2
+				*/
+				// HE Operation
+				if (p[2] == 0x24 && p[1] >= 3) 
+				{
+					// Standard is AX
+					strcpy(ap_cur->standard, "ax");
+					
+					// Process 3-byte HE Operations flags field with reverse byte order considering endian-ness
+        			//uint32_t he_ops_flags = letoh32((*(uint32_t *) (p + 3)) & 0x00FFFFFF);
+					uint32_t he_ops_flags = letoh24(p + 3);
+					if (he_ops_flags & 0x20000) // Second to last bit in 24-bit field
+					{
+						// Parse 6GHz operation information (5 bytes)
+						if (p[1] >= 10) // Ensure enough length for 6GHz operation info
+						{
+							// Primary channel number
+							ap_cur->channel = p[9];
+							ap_cur->band = 6;
+							// Control flags
+							uint8_t control_field = p[10];
+
+							if (p[1] >= 12)
+							{
+								// Channel center frequency segments
+								ap_cur->ax_channel.center_sgmt[0] = p[11];
+								ap_cur->ax_channel.center_sgmt[1] = p[12];
+
+								uint8_t ch_width = (control_field >> 6) & 0x03;
+
+								switch (ch_width) {
+									case 0:
+										// 20 MHz
+										ap_cur->channel_width = CHANNEL_20MHZ;
+										break;
+									case 1:
+										// 40 MHz
+										ap_cur->channel_width = CHANNEL_40MHZ;
+										break;
+									case 2:
+										// 80 MHz
+										ap_cur->channel_width = CHANNEL_80MHZ;
+										break;
+									case 3:
+										// 80+80 MHz or 160 MHz
+										// IEEE Std 802.11ax-2021 - pp.199
+										if ((ap_cur->ax_channel.center_sgmt[1] != 0) && (ap_cur->ax_channel.center_sgmt[1] != ap_cur->ax_channel.center_sgmt[0]))
+										{
+											// 80+80 MHz scenario
+											ap_cur->channel_width = CHANNEL_80_80MHZ;
+											ap_cur->ax_channel.mhz_160_chan = 0;
+											ap_cur->ax_channel.split_chan = 1;
+										} else if (ap_cur->ax_channel.center_sgmt[0] != 0) {
+											// 160 MHz scenario
+											ap_cur->channel_width = CHANNEL_160MHZ;
+											ap_cur->ax_channel.mhz_160_chan = 1;
+											ap_cur->ax_channel.split_chan = 0;
+										}
+										break;
+								}
+							}
+						}
+					}
+				}
+			} 
+			
+			// Next
+			if (p[0] == 0x0b && p[1] >= 5)
+			{
+				/* BSS Load: station count, channel utilization, available capacity */
+				ap_cur->bss_load_station_count = (int) load16_le(p + 2);
+			}
+
 			// Next
 			p += 2 + p[1];
+			
 		}
 
 		// Now get max rate
@@ -2157,12 +3164,12 @@ skip_probe:
 				float max_rate
 					= (ap_cur->standard[0] == 'n')
 						  ? get_80211n_rate(
-							  width, sgi, ap_cur->n_channel.mcs_index)
+								width, sgi, ap_cur->n_channel.mcs_index)
 						  : get_80211ac_rate(
-							  width,
-							  sgi,
-							  ap_cur->ac_channel.mcs_index[amount_ss - 1],
-							  amount_ss);
+								width,
+								sgi,
+								ap_cur->ac_channel.mcs_index[amount_ss - 1],
+								amount_ss);
 
 				// If no error, update rate
 				if (max_rate > 0)
@@ -2228,7 +3235,7 @@ skip_probe:
 				if (p + 9 + offset > h80211 + caplen) break;
 				numuni = p[8 + offset] + (p[9 + offset] << 8);
 
-				// Number of Authentication Key Management suites
+				// Number of Authentication Key Managament suites
 				if (p + (11 + offset) + 4 * numuni > h80211 + caplen) break;
 				numauth = p[(10 + offset) + 4 * numuni]
 						  + (p[(11 + offset) + 4 * numuni] << 8);
@@ -2242,9 +3249,9 @@ skip_probe:
 				}
 				else
 				{
-					if (p + (4 * numuni) + (2 + 4 * numauth) + 2
-						> h80211 + caplen)
-						break;
+				if (p + (4 * numuni) + (2 + 4 * numauth) + 2
+					> h80211 + caplen)
+					break;
 				}
 
 				// Get the list of cipher suites
@@ -2309,6 +3316,26 @@ skip_probe:
 							break;
 						default:
 							break;
+					}
+				}
+
+				if (type == 0x30)
+				{
+					const unsigned char * rsn_cap = p + 2 + 4 * numauth;
+
+					if (rsn_cap + 2 <= h80211 + caplen)
+					{
+						unsigned short rsn_caps
+							= (unsigned short) (rsn_cap[0]
+												| ((unsigned short) rsn_cap[1] << 8));
+
+						if (rsn_caps & 0x0080)
+							ap_cur->mfp_capable = 1;
+						if (rsn_caps & 0x0040)
+						{
+							ap_cur->mfp_capable = 1;
+							ap_cur->mfp_required = 1;
+						}
 					}
 				}
 
@@ -2497,6 +3524,7 @@ skip_probe:
 			else
 				ap_cur->channel = lopt.channel[cardnum];
 		}
+		ap_cur->band = band_from_rx_info(ri, ap_cur->channel);
 
 		/* check the SNAP header to see if data is encrypted */
 
@@ -2529,25 +3557,29 @@ skip_probe:
 
 		if (z == 24)
 		{
-			if (list_check_decloak(&(ap_cur->packets), caplen, h80211) != 0)
+			if (ap_cur->decloak_detect && (ap_cur->security & STD_WEP) != 0)
 			{
-				list_add_packet(&(ap_cur->packets), caplen, h80211);
-			}
-			else
-			{
-				ap_cur->is_decloak = 1;
-				ap_cur->decloak_detect = 0;
-				list_tail_free(&(ap_cur->packets));
-				memset(lopt.message, '\x00', sizeof(lopt.message));
-				snprintf(lopt.message,
-						 sizeof(lopt.message) - 1,
-						 "][ Decloak: %02X:%02X:%02X:%02X:%02X:%02X ",
-						 ap_cur->bssid[0],
-						 ap_cur->bssid[1],
-						 ap_cur->bssid[2],
-						 ap_cur->bssid[3],
-						 ap_cur->bssid[4],
-						 ap_cur->bssid[5]);
+				if (list_check_decloak(&(ap_cur->packets), caplen, h80211) != 0)
+				{
+					list_add_packet(&(ap_cur->packets), caplen, h80211);
+				}
+				else
+				{
+					ap_cur->is_decloak = 1;
+					ap_cur->decloak_detect = 0;
+					list_tail_free(&(ap_cur->packets));
+					memset(lopt.message, '\x00', sizeof(lopt.message));
+					snprintf(lopt.message,
+							 sizeof(lopt.message) - 1,
+							 "][ Decloak: %02X:%02X:%02X:%02X:%02X:%02X ",
+							 ap_cur->bssid[0],
+							 ap_cur->bssid[1],
+							 ap_cur->bssid[2],
+							 ap_cur->bssid[3],
+							 ap_cur->bssid[4],
+							 ap_cur->bssid[5]);
+					append_tui_message_history_now(lopt.message);
+				}
 			}
 		}
 
@@ -2625,10 +3657,10 @@ skip_probe:
 						ivs2.flags |= IVS2_XOR;
 						ivs2.len += clen + 4;
 						/* reveal keystream (plain^encrypted) */
-						for (n = 0; n < (size_t) (ivs2.len - 4); n++)
+						for (n = 0; n < (size_t)(ivs2.len - 4); n++)
 						{
-							clear[n] = (uint8_t) ((clear[n] ^ h80211[z + 4 + n])
-												  & 0xFF);
+							clear[n] = (uint8_t)((clear[n] ^ h80211[z + 4 + n])
+												 & 0xFF);
 						}
 						// clear is now the keystream
 					}
@@ -2646,12 +3678,11 @@ skip_probe:
 						/* reveal keystream (plain^encrypted) */
 						for (o = 0; o < num_xor; o++)
 						{
-							for (n = 0; n < (size_t) (ivs2.len - 4); n++)
+							for (n = 0; n < (size_t)(ivs2.len - 4); n++)
 							{
-								clear[2 + n + o * 32]
-									= (uint8_t) ((clear[2 + n + o * 32]
-												  ^ h80211[z + 4 + n])
-												 & 0xFF);
+								clear[2 + n + o * 32] = (uint8_t)(
+									(clear[2 + n + o * 32] ^ h80211[z + 4 + n])
+									& 0xFF);
 							}
 						}
 						memcpy(clear + 4 + 1 + 1 + 32 * num_xor,
@@ -2728,6 +3759,7 @@ skip_probe:
 							 ap_cur->bssid[3],
 							 ap_cur->bssid[4],
 							 ap_cur->bssid[5]);
+					append_tui_message_history_now(lopt.message);
 				}
 			}
 		}
@@ -2760,89 +3792,53 @@ skip_probe:
 			/* frame 1: Pairwise == 1, Install == 0, Ack == 1, MIC == 0 */
 
 			if ((h80211[z + 6] & 0x08) != 0 && (h80211[z + 6] & 0x40) == 0
-				&& (h80211[z + 6] & 0x80) != 0 && (h80211[z + 5] & 0x01) == 0)
+				&& (h80211[z + 6] & 0x80) != 0
+				&& (h80211[z + 5] & 0x01) == 0)
 			{
 				memcpy(st_cur->wpa.anonce, &h80211[z + 17], 32);
 
 				st_cur->wpa.state = 1;
 
-				uint8_t key_descriptor_version = (uint8_t) (h80211[z + 6] & 7);
-
-				p = h80211 + z + 99;
-
-				while (p < h80211 + caplen)
+				if (h80211[z + 99] == IEEE80211_ELEMID_VENDOR)
 				{
-					if (p + 2 + p[1] > h80211 + caplen) break;
-#ifdef XDEBUG
-					fprintf(stderr, "IE element: %d\n", p[0]);
-					fprintf(stderr, "IE length: %d\n", p[1]);
-#endif
-					if (p[0] == IEEE80211_ELEMID_VENDOR)
+					const uint8_t rsn_oui[] = {RSN_OUI & 0xff,
+											   (RSN_OUI >> 8) & 0xff,
+											   (RSN_OUI >> 16) & 0xff};
+
+					if (memcmp(rsn_oui, &h80211[z + 101], 3) == 0
+						&& h80211[z + 104] == RSN_CSE_CCMP)
 					{
-						size_t rsn_len = p[1];
-						size_t pos = 2;
-						const uint8_t rsn_oui[] = {RSN_OUI & 0xff,
-												   (RSN_OUI >> 8) & 0xff,
-												   (RSN_OUI >> 16) & 0xff};
-#ifdef XDEBUG
-						fprintf(stderr, "RSN length: %zd\n", rsn_len);
-						fprintf(stderr,
-								"OUI is %02x:%02x:%02x\n",
-								p[pos],
-								p[pos + 1],
-								p[pos + 2]);
-#endif
-						if (memcmp(rsn_oui, &p[pos], 3) == 0)
+						if (memcmp(ZERO, &h80211[z + 105], 16) != 0) //-V512
 						{
-							if (pos + 3 > rsn_len) goto rsn_out;
-							pos += 3; // advance over RSN OUI
+							// Got a PMKID value?!
+							memcpy(st_cur->wpa.pmkid, &h80211[z + 105], 16);
 
-#ifdef XDEBUG
-							fprintf(stderr,
-									"The cipher tag value '%d' is used with "
-									"the key descriptor version '%d'\n",
-									p[pos],
-									key_descriptor_version);
-#endif
-							if (pos + 1 > rsn_len) goto rsn_out;
-							pos += 1; // advance over tag value
+							/* copy the key descriptor version */
+							st_cur->wpa.keyver = (uint8_t)(h80211[z + 6] & 7);
 
-							if (key_descriptor_version > 0
-								&& memcmp(ZERO, &p[pos], 16) //-V512
-									   != 0)
+							memcpy(st_cur->wpa.stmac, st_cur->stmac, 6);
+							if (!ap_cur->pmkid_logged)
 							{
-#ifdef XDEBUG
-								fprintf(stderr, "FOUND valid CCM PMKID\n");
-#endif
-								// Got a PMKID value?!
-								memcpy(st_cur->wpa.pmkid, &p[pos], 16);
-
-								/* copy the key descriptor version */
-								st_cur->wpa.keyver = key_descriptor_version;
-
-								memcpy(st_cur->wpa.stmac, st_cur->stmac, 6);
+								ap_cur->pmkid_logged = 1;
 								memcpy(lopt.wpa_bssid, ap_cur->bssid, 6);
-								memset(
-									lopt.message, '\x00', sizeof(lopt.message));
+								memset(lopt.message, '\x00', sizeof(lopt.message));
 								snprintf(lopt.message,
-										 sizeof(lopt.message) - 1,
-										 "][ PMKID found: "
-										 "%02X:%02X:%02X:%02X:%02X:%02X ",
-										 lopt.wpa_bssid[0],
-										 lopt.wpa_bssid[1],
-										 lopt.wpa_bssid[2],
-										 lopt.wpa_bssid[3],
-										 lopt.wpa_bssid[4],
-										 lopt.wpa_bssid[5]);
-
-								goto write_packet;
+										sizeof(lopt.message) - 1,
+										"][ PMKID found: "
+										"%02X:%02X:%02X:%02X:%02X:%02X ",
+										lopt.wpa_bssid[0],
+										lopt.wpa_bssid[1],
+										lopt.wpa_bssid[2],
+										lopt.wpa_bssid[3],
+										lopt.wpa_bssid[4],
+										lopt.wpa_bssid[5]);
+								append_tui_message_history_now(lopt.message);
 							}
+
+							goto write_packet;
 						}
 					}
-
-					p += 2 + p[1];
 				}
-			rsn_out:;
 			}
 
 			/* frame 2 or 4: Pairwise == 1, Install == 0, Ack == 0, MIC == 1 */
@@ -2850,7 +3846,8 @@ skip_probe:
 			if (z + 17 + 32 > (unsigned) caplen) goto write_packet;
 
 			if ((h80211[z + 6] & 0x08) != 0 && (h80211[z + 6] & 0x40) == 0
-				&& (h80211[z + 6] & 0x80) == 0 && (h80211[z + 5] & 0x01) != 0)
+				&& (h80211[z + 6] & 0x80) == 0
+				&& (h80211[z + 5] & 0x01) != 0)
 			{
 				if (memcmp(&h80211[z + 17], ZERO, 32) != 0)
 				{
@@ -2861,7 +3858,7 @@ skip_probe:
 				if ((st_cur->wpa.state & 4) != 4)
 				{
 					st_cur->wpa.eapol_size
-						= (uint32_t) ((h80211[z + 2] << 8) + h80211[z + 3] + 4);
+						= (uint32_t)((h80211[z + 2] << 8) + h80211[z + 3] + 4);
 
 					if (caplen - z < st_cur->wpa.eapol_size
 						|| st_cur->wpa.eapol_size == 0 //-V560
@@ -2878,14 +3875,15 @@ skip_probe:
 						st_cur->wpa.eapol, &h80211[z], st_cur->wpa.eapol_size);
 					memset(st_cur->wpa.eapol + 81, 0, 16);
 					st_cur->wpa.state |= 4;
-					st_cur->wpa.keyver = (uint8_t) (h80211[z + 6] & 7);
+					st_cur->wpa.keyver = (uint8_t)(h80211[z + 6] & 7);
 				}
 			}
 
 			/* frame 3: Pairwise == 1, Install == 1, Ack == 1, MIC == 1 */
 
 			if ((h80211[z + 6] & 0x08) != 0 && (h80211[z + 6] & 0x40) != 0
-				&& (h80211[z + 6] & 0x80) != 0 && (h80211[z + 5] & 0x01) != 0)
+				&& (h80211[z + 6] & 0x80) != 0
+				&& (h80211[z + 5] & 0x01) != 0)
 			{
 				if (memcmp(&h80211[z + 17], ZERO, 32) != 0)
 				{
@@ -2912,12 +3910,14 @@ skip_probe:
 						st_cur->wpa.eapol, &h80211[z], st_cur->wpa.eapol_size);
 					memset(st_cur->wpa.eapol + 81, 0, 16);
 					st_cur->wpa.state |= 4;
-					st_cur->wpa.keyver = (uint8_t) (h80211[z + 6] & 7);
+					st_cur->wpa.keyver = (uint8_t)(h80211[z + 6] & 7);
 				}
 			}
 
-			if (st_cur->wpa.state == 7 && !is_filtered_essid(ap_cur->essid))
+			if (st_cur->wpa.state == 7 && !is_filtered_essid(ap_cur->essid)
+				&& !ap_cur->handshake_logged)
 			{
+				ap_cur->handshake_logged = 1;
 				memcpy(st_cur->wpa.stmac, st_cur->stmac, 6);
 				memcpy(lopt.wpa_bssid, ap_cur->bssid, 6);
 				memset(lopt.message, '\x00', sizeof(lopt.message));
@@ -2930,6 +3930,7 @@ skip_probe:
 						 lopt.wpa_bssid[3],
 						 lopt.wpa_bssid[4],
 						 lopt.wpa_bssid[5]);
+				append_tui_message_history_now(lopt.message);
 
 				if (opt.f_ivs != NULL)
 				{
@@ -3167,12 +4168,42 @@ write_packet:
 
 	if (opt.f_cap != NULL && caplen >= 10)
 	{
+
 		pkh.len = pkh.caplen = (uint32_t) caplen;
 
 		gettimeofday(&tv, NULL);
 
 		pkh.tv_sec = (int32_t) tv.tv_sec;
 		pkh.tv_usec = (int32_t) tv.tv_usec;
+		
+		if (lopt.ppi) {
+			float gpsLat = 0, gpsLon = 0, gpsAlt = 0;
+			if (lopt.coordinates[0] != 0 || lopt.coordinates[1] != 0) {
+				gpsLat = (float)lopt.coordinates[0];
+				gpsLon = (float)lopt.coordinates[1];
+				gpsAlt = 0;
+			} else {
+				// call to calculate ppi header length
+				gpsLat = lopt.gps_loc[0];
+				gpsLon = lopt.gps_loc[1];
+				gpsAlt = lopt.gps_loc[4];
+			}
+			ppi_header_len = calculate_ppi_header_length(gpsLat, gpsLon, gpsAlt);
+			// Update caplen in the packet header
+			pkh.len = pkh.caplen = (uint32_t)(caplen + ppi_header_len);
+		}
+
+		
+		// Allocate memory for full packet (PCAP header + PPI header + packet payload)
+		total_packet_size = sizeof(pkh) + ppi_header_len + caplen;
+		packet_data = (uint8_t *)malloc(total_packet_size);
+		if (!packet_data) {
+			perror("malloc failed");
+			return 1;
+		}
+
+		// Copy PCAP Packet header into packet_data address
+		memcpy(packet_data, &pkh, sizeof(pkh));
 
 		n = sizeof(pkh);
 
@@ -3184,9 +4215,99 @@ write_packet:
 
 		fflush(stdout);
 
-		n = pkh.caplen;
+		if (lopt.ppi) {
+			float gpsLat = 0, gpsLon = 0, gpsAlt = 0;
+			if (lopt.coordinates[0] != 0.0 || lopt.coordinates[1] != 0.0) {
+				// Case 1: User provided command-line coordinates
+				gpsLat = (float)lopt.coordinates[0];
+				gpsLon = (float)lopt.coordinates[1];
+				gpsAlt = 0;
 
-		if (fwrite(h80211, 1, n, opt.f_cap) != (size_t) n)
+			} else if (lopt.gps_loc[0] != 0.0 || lopt.gps_loc[1] != 0.0) {
+				// Case 2: Live GPS data
+				gpsLat = (float)lopt.gps_loc[0];
+				gpsLon = (float)lopt.gps_loc[1];
+				gpsAlt = (float)lopt.gps_loc[4];
+
+				// Save latest valid fix
+				last_coordinates[0] = lopt.gps_loc[0];
+				last_coordinates[1] = lopt.gps_loc[1];
+				last_coordinates[2] = lopt.gps_loc[4];
+
+			} else if (last_coordinates[0] != 0.0 || last_coordinates[1] != 0.0) {
+				// Case 3: Fallback to last known good GPS fix
+				gpsLat = (float)last_coordinates[0];
+				gpsLon = (float)last_coordinates[1];
+				gpsAlt = (float)last_coordinates[2];
+			}
+
+			uint64_t tsfTimer = ri->ri_mactime; // Time Synchronization Function timer, usually a 64-bit value
+			int dataRate = ri->ri_rate / 50000;      // Data rate in Mbps, integer value (e.g., 1 Mbps)
+			int freq = getFrequencyFromChannel(ri->ri_channel);       // Frequency in MHz, for 2.4 GHz band channels (e.g., 2412 MHz for channel 1)
+			int rssi = ri->ri_power;        // Received Signal Strength Indicator, in dBm (e.g., -50 dBm)
+			int noise = ri->ri_noise;      // Noise level in dBm (e.g., -100 dBm)
+			write_ppi_headers(opt.f_cap, tsfTimer, dataRate, freq, rssi, noise, gpsLat, gpsLon, gpsAlt);
+		}
+
+		if (lopt.tcp_sock_fd > 0) {
+
+			if (lopt.ppi) {
+				float gpsLat = 0, gpsLon = 0, gpsAlt = 0;
+				if (lopt.coordinates[0] != 0.0 || lopt.coordinates[1] != 0.0) {
+					// Case 1: User provided command-line coordinates
+					gpsLat = (float)lopt.coordinates[0];
+					gpsLon = (float)lopt.coordinates[1];
+					gpsAlt = 0;
+
+				} else if (lopt.gps_loc[0] != 0.0 || lopt.gps_loc[1] != 0.0) {
+					// Case 2: Live GPS data
+					gpsLat = (float)lopt.gps_loc[0];
+					gpsLon = (float)lopt.gps_loc[1];
+					gpsAlt = (float)lopt.gps_loc[4];
+
+					// Save latest valid fix
+					last_coordinates[0] = lopt.gps_loc[0];
+					last_coordinates[1] = lopt.gps_loc[1];
+					last_coordinates[2] = lopt.gps_loc[4];
+
+				} else if (last_coordinates[0] != 0.0 || last_coordinates[1] != 0.0) {
+					// Case 3: Fallback to last known good GPS fix
+					gpsLat = (float)last_coordinates[0];
+					gpsLon = (float)last_coordinates[1];
+					gpsAlt = (float)last_coordinates[2];
+				}
+
+				uint64_t tsfTimer = ri->ri_mactime; // Time Synchronization Function timer, usually a 64-bit value
+				int dataRate = ri->ri_rate / 50000;      // Data rate in Mbps, integer value (e.g., 1 Mbps)
+				int freq = getFrequencyFromChannel(ri->ri_channel);       // Frequency in MHz, for 2.4 GHz band channels (e.g., 2412 MHz for channel 1)
+				int rssi = ri->ri_power;        // Received Signal Strength Indicator, in dBm (e.g., -50 dBm)
+				int noise = ri->ri_noise;      // Noise level in dBm (e.g., -100 dBm)
+				write_ppi_headers_to_buffer(packet_data + sizeof(pkh), tsfTimer, dataRate, freq, rssi, noise, gpsLat, gpsLon, gpsAlt);
+
+			}
+
+			// Copy packet payload
+			memcpy(packet_data + sizeof(pkh) + ppi_header_len, h80211, caplen);
+
+			// *** Send over TCP if sockfd is valid ***
+			if (lopt.tcp_sock_fd > 0) {
+				n = send(lopt.tcp_sock_fd, packet_data, total_packet_size, 0);
+				if (n <= 0) {
+					if (n == 0) {
+						printf("\nClient disconnected gracefully.\n");
+					} else {
+						perror("\nSend failed, client may have disconnected");
+					}
+					close(lopt.tcp_sock_fd);  // Close the socket
+					lopt.tcp_sock_fd = -1;    // Mark socket as invalid
+				}
+			}
+
+		}
+
+		//n = pkh.caplen;
+
+		if (fwrite(h80211, 1, caplen, opt.f_cap) != caplen)
 		{
 			perror("fwrite(packet data) failed");
 			return (1);
@@ -3195,22 +4316,17 @@ write_packet:
 		fflush(stdout);
 	}
 
+	free(packet_data);
 	return (0);
 }
 
 static void dump_sort(void)
 {
-	time_t tt = time(NULL);
-
 	/* thanks to Arnaud Cornet :-) */
 
 	struct AP_info * new_ap_1st = NULL;
 	struct AP_info * new_ap_end = NULL;
 
-	struct ST_info * new_st_1st = NULL;
-	struct ST_info * new_st_end = NULL;
-
-	struct ST_info *st_cur, *st_min;
 	struct AP_info *ap_cur, *ap_min;
 
 	/* sort the aps by WHATEVER first */
@@ -3220,18 +4336,9 @@ static void dump_sort(void)
 		ap_min = NULL;
 		ap_cur = lopt.ap_1st;
 
-		while (ap_cur != NULL)
-		{
-			if (tt - ap_cur->tlast > 20) ap_min = ap_cur;
+		ap_min = ap_cur = lopt.ap_1st;
 
-			ap_cur = ap_cur->next;
-		}
-
-		if (ap_min == NULL)
-		{
-			ap_min = ap_cur = lopt.ap_1st;
-
-			/*#define SORT_BY_BSSID	1
+		/*#define SORT_BY_BSSID	1
 #define SORT_BY_POWER	2
 #define SORT_BY_BEACON	3
 #define SORT_BY_DATA	4
@@ -3243,84 +4350,90 @@ static void dump_sort(void)
 #define SORT_BY_AUTH	11
 #define SORT_BY_ESSID	12*/
 
-			while (ap_cur != NULL)
+		while (ap_cur != NULL)
+		{
+			switch (lopt.sort_by)
 			{
-				switch (lopt.sort_by)
+				case SORT_BY_BSSID:
+					if (memcmp(ap_cur->bssid, ap_min->bssid, 6)
+							* lopt.sort_inv
+						< 0)
+						ap_min = ap_cur;
+					break;
+				case SORT_BY_POWER:
+					if ((ap_cur->avg_power - ap_min->avg_power) * lopt.sort_inv
+						< 0)
+						ap_min = ap_cur;
+					break;
+				case SORT_BY_BEACON:
+					if ((ap_cur->nb_bcn < ap_min->nb_bcn) && lopt.sort_inv)
+						ap_min = ap_cur;
+					break;
+				case SORT_BY_DATA:
+					if ((ap_cur->nb_data < ap_min->nb_data) && lopt.sort_inv)
+						ap_min = ap_cur;
+					break;
+				case SORT_BY_PRATE:
+					if ((ap_cur->nb_dataps - ap_min->nb_dataps) * lopt.sort_inv
+						< 0)
+						ap_min = ap_cur;
+					break;
+				case SORT_BY_CHAN:
+					if ((ap_cur->channel - ap_min->channel) * lopt.sort_inv
+						< 0)
+						ap_min = ap_cur;
+					break;
+				case SORT_BY_STAS:
 				{
-					case SORT_BY_BSSID:
-						if (memcmp(ap_cur->bssid, ap_min->bssid, 6)
-								* lopt.sort_inv
-							< 0)
-							ap_min = ap_cur;
-						break;
-					case SORT_BY_POWER:
-						if ((ap_cur->avg_power - ap_min->avg_power)
-								* lopt.sort_inv
-							< 0)
-							ap_min = ap_cur;
-						break;
-					case SORT_BY_BEACON:
-						if ((ap_cur->nb_bcn < ap_min->nb_bcn) && lopt.sort_inv)
-							ap_min = ap_cur;
-						break;
-					case SORT_BY_DATA:
-						if ((ap_cur->nb_data < ap_min->nb_data)
-							&& lopt.sort_inv)
-							ap_min = ap_cur;
-						break;
-					case SORT_BY_PRATE:
-						if ((ap_cur->nb_dataps - ap_min->nb_dataps)
-								* lopt.sort_inv
-							< 0)
-							ap_min = ap_cur;
-						break;
-					case SORT_BY_CHAN:
-						if ((ap_cur->channel - ap_min->channel) * lopt.sort_inv
-							< 0)
-							ap_min = ap_cur;
-						break;
-					case SORT_BY_MBIT:
-						if ((ap_cur->max_speed - ap_min->max_speed)
-								* lopt.sort_inv
-							< 0)
-							ap_min = ap_cur;
-						break;
-					case SORT_BY_ENC:
-						if (((int) (ap_cur->security & STD_FIELD)
-							 - (int) (ap_min->security & STD_FIELD))
-								* lopt.sort_inv
-							< 0)
-							ap_min = ap_cur;
-						break;
-					case SORT_BY_CIPHER:
-						if (((int) (ap_cur->security & ENC_FIELD)
-							 - (int) (ap_min->security & ENC_FIELD))
-								* lopt.sort_inv
-							< 0)
-							ap_min = ap_cur;
-						break;
-					case SORT_BY_AUTH:
-						if (((int) (ap_cur->security & AUTH_FIELD)
-							 - (int) (ap_min->security & AUTH_FIELD))
-								* lopt.sort_inv
-							< 0)
-							ap_min = ap_cur;
-						break;
-					case SORT_BY_ESSID:
-						if ((strncasecmp((char *) ap_cur->essid,
-										 (char *) ap_min->essid,
-										 ESSID_LENGTH))
-								* lopt.sort_inv
-							< 0)
-							ap_min = ap_cur;
-						break;
-					default: // sort by power
-						if (ap_cur->avg_power < ap_min->avg_power)
-							ap_min = ap_cur;
-						break;
+					int lhs_rank = ap_station_count_rank(ap_cur);
+					int rhs_rank = ap_station_count_rank(ap_min);
+
+					if ((lhs_rank - rhs_rank) * lopt.sort_inv < 0)
+						ap_min = ap_cur;
+					break;
 				}
-				ap_cur = ap_cur->next;
+				case SORT_BY_MBIT:
+					if ((ap_cur->max_speed - ap_min->max_speed) * lopt.sort_inv
+						< 0)
+						ap_min = ap_cur;
+					break;
+				case SORT_BY_ENC:
+				{
+					int lhs_rank = ap_security_std_rank(ap_cur->security);
+					int rhs_rank = ap_security_std_rank(ap_min->security);
+
+					if ((lhs_rank - rhs_rank) * lopt.sort_inv < 0)
+						ap_min = ap_cur;
+					break;
+				}
+				case SORT_BY_CIPHER:
+				{
+					int lhs_rank = ap_security_cipher_rank(ap_cur->security);
+					int rhs_rank = ap_security_cipher_rank(ap_min->security);
+
+					if ((lhs_rank - rhs_rank) * lopt.sort_inv < 0)
+						ap_min = ap_cur;
+					break;
+				}
+				case SORT_BY_AUTH:
+				{
+					int lhs_rank = ap_security_auth_rank(ap_cur->security);
+					int rhs_rank = ap_security_auth_rank(ap_min->security);
+
+					if ((lhs_rank - rhs_rank) * lopt.sort_inv < 0)
+						ap_min = ap_cur;
+					break;
+				}
+				case SORT_BY_ESSID:
+					if (ap_essid_compare(ap_cur, ap_min) * lopt.sort_inv < 0)
+						ap_min = ap_cur;
+					break;
+				default: // sort by power
+					if (ap_cur->avg_power < ap_min->avg_power)
+						ap_min = ap_cur;
+					break;
 			}
+			ap_cur = ap_cur->next;
 		}
 
 		if (ap_min == lopt.ap_1st) lopt.ap_1st = ap_min->next;
@@ -3347,57 +4460,27 @@ static void dump_sort(void)
 
 	lopt.ap_1st = new_ap_1st;
 	lopt.ap_end = new_ap_end;
+}
 
-	/* now sort the stations */
-
-	while (lopt.st_1st)
+static int ap_sort_is_live(int sort_by)
+{
+	switch (sort_by)
 	{
-		st_min = NULL;
-		st_cur = lopt.st_1st;
-
-		while (st_cur != NULL)
-		{
-			if (tt - st_cur->tlast > 60) st_min = st_cur;
-
-			st_cur = st_cur->next;
-		}
-
-		if (st_min == NULL)
-		{
-			st_min = st_cur = lopt.st_1st;
-
-			while (st_cur != NULL)
-			{
-				if (st_cur->power < st_min->power) st_min = st_cur;
-
-				st_cur = st_cur->next;
-			}
-		}
-
-		if (st_min == lopt.st_1st) lopt.st_1st = st_min->next;
-
-		if (st_min == lopt.st_end) lopt.st_end = st_min->prev;
-
-		if (st_min->next) st_min->next->prev = st_min->prev;
-
-		if (st_min->prev) st_min->prev->next = st_min->next;
-
-		if (new_st_end)
-		{
-			new_st_end->next = st_min;
-			st_min->prev = new_st_end;
-			new_st_end = st_min;
-			new_st_end->next = NULL;
-		}
-		else
-		{
-			new_st_1st = new_st_end = st_min;
-			st_min->next = st_min->prev = NULL;
-		}
+		case SORT_BY_POWER:
+		case SORT_BY_BEACON:
+		case SORT_BY_DATA:
+		case SORT_BY_PRATE:
+		case SORT_BY_CHAN:
+		case SORT_BY_STAS:
+		case SORT_BY_MBIT:
+		case SORT_BY_ENC:
+		case SORT_BY_CIPHER:
+		case SORT_BY_AUTH:
+		case SORT_BY_ESSID:
+			return (1);
+		default:
+			return (0);
 	}
-
-	lopt.st_1st = new_st_1st;
-	lopt.st_end = new_st_end;
 }
 
 static int getBatteryState(void) { return get_battery_state(); }
@@ -3494,7 +4577,7 @@ static char * parse_timestamp(unsigned long long timestamp)
 	memset(s, 0, TSTP_LEN);
 
 	// Calculate days, hours, mins and secs
-	days = (uint8_t) (timestamp / TSTP_DAY);
+	days = (uint8_t)(timestamp / TSTP_DAY);
 	rem = timestamp % TSTP_DAY;
 	hours = (unsigned char) (rem / TSTP_HOUR);
 	rem %= TSTP_HOUR;
@@ -3511,23 +4594,10 @@ static char * parse_timestamp(unsigned long long timestamp)
 static int IsAp2BeSkipped(struct AP_info * ap_cur)
 {
 	REQUIRE(ap_cur != NULL);
-	int i = 0;
-	int match = 0;
 
 	if (ap_cur->nb_pkt < lopt.min_pkts
 		|| time(NULL) - ap_cur->tlast > lopt.berlin
 		|| memcmp(ap_cur->bssid, BROADCAST, 6) == 0)
-	{
-		return (1);
-	}
-
-	if (ap_cur->avg_power < (int) lopt.min_power)
-	{
-		return (1);
-	}
-
-	if ((lopt.singlechan || lopt.singlefreq)
-		&& (ap_cur->rx_quality < (int) lopt.min_rxq))
 	{
 		return (1);
 	}
@@ -3543,21 +4613,2034 @@ static int IsAp2BeSkipped(struct AP_info * ap_cur)
 		return (1);
 	}
 
-	if (lopt.chanoption && lopt.ignore_other_channels)
+	return (0);
+}
+
+static struct AP_info * find_unassociated_ap(void)
+{
+	struct AP_info * ap_cur = lopt.ap_end;
+
+	while (ap_cur != NULL)
 	{
-		while (lopt.own_channels[i])
+		if (memcmp(ap_cur->bssid, BROADCAST, 6) == 0)
+			return (ap_cur);
+		ap_cur = ap_cur->prev;
+	}
+
+	return (NULL);
+}
+
+static int has_unassociated_clients(void)
+{
+	struct ST_info * st_cur = lopt.st_1st;
+
+	while (st_cur != NULL)
+	{
+		if (time(NULL) - st_cur->tlast <= lopt.berlin
+			&& st_cur->base != NULL
+			&& memcmp(st_cur->base->bssid, BROADCAST, 6) == 0)
 		{
-			if (ap_cur->channel == lopt.own_channels[i])
-			{
-				match = 1;
-				break;
-			}
-			i++;
+			return (1);
 		}
-		if (match != 1) return (1);
+		st_cur = st_cur->next;
 	}
 
 	return (0);
+}
+
+static struct AP_info * find_visible_ap_from_head(void)
+{
+	struct AP_info * ap_cur = lopt.ap_end;
+
+	while (ap_cur != NULL && IsAp2BeSkipped(ap_cur))
+		ap_cur = ap_cur->prev;
+	if (ap_cur == NULL && has_unassociated_clients())
+		return (find_unassociated_ap());
+	return (ap_cur);
+}
+
+static struct AP_info * find_visible_ap_from_tail(void)
+{
+	struct AP_info * ap_cur = lopt.ap_1st;
+
+	while (ap_cur != NULL && IsAp2BeSkipped(ap_cur))
+		ap_cur = ap_cur->next;
+	if (ap_cur == NULL && has_unassociated_clients())
+		return (find_unassociated_ap());
+	return (ap_cur);
+}
+
+static struct AP_info * find_tui_visible_ap_relative(struct AP_info * current, int direction)
+{
+	struct AP_info * ap_cur;
+	struct AP_info * ap_rows[4096];
+	size_t ap_count = 0;
+	size_t i;
+
+	if (current == NULL) return (NULL);
+	if (direction == 0) return (current);
+
+	ap_cur = lopt.ap_end;
+	while (ap_cur != NULL && ap_count < sizeof(ap_rows) / sizeof(ap_rows[0]))
+	{
+		if (!IsAp2BeSkipped(ap_cur))
+			ap_rows[ap_count++] = ap_cur;
+		ap_cur = ap_cur->prev;
+	}
+
+	if (has_unassociated_clients() && ap_count < sizeof(ap_rows) / sizeof(ap_rows[0]))
+	{
+		ap_cur = find_unassociated_ap();
+		if (ap_cur != NULL)
+			ap_rows[ap_count++] = ap_cur;
+	}
+
+	for (i = 0; i < ap_count; i++)
+	{
+		if (ap_rows[i] == current)
+		{
+			if (direction < 0)
+			{
+				if (i == 0) return (NULL);
+				return (ap_rows[i - 1]);
+			}
+			if (i + 1 >= ap_count) return (NULL);
+			return (ap_rows[i + 1]);
+		}
+	}
+
+	return (NULL);
+}
+
+static void record_tui_message_history(void)
+{
+	char normalized[sizeof(tui_message_history_last)];
+
+	if (channel_entry_active) return;
+	if (!normalize_tui_message(lopt.message, normalized, sizeof(normalized)))
+		return;
+	if (strstr(normalized, "Are you sure you want to quit? Press Q again to quit.") != NULL)
+		return;
+	if (strcmp(normalized, tui_message_history_last) == 0) return;
+
+	append_tui_message_history(normalized, time(NULL));
+}
+
+static void append_tui_message_history(const char * message, time_t timestamp)
+{
+	char normalized[sizeof(tui_message_history_last)];
+
+	if (message == NULL || *message == '\0') return;
+	if (!normalize_tui_message(message, normalized, sizeof(normalized)))
+		return;
+	if (strcmp(normalized, tui_message_history_last) == 0) return;
+
+	if (tui_message_history_count == AIRODUMP_TUI_MESSAGE_HISTORY)
+	{
+		memmove(tui_message_history,
+				tui_message_history + 1,
+				(AIRODUMP_TUI_MESSAGE_HISTORY - 1) * sizeof(tui_message_history[0]));
+		tui_message_history_count = AIRODUMP_TUI_MESSAGE_HISTORY - 1;
+	}
+
+	tui_message_history[tui_message_history_count].timestamp = timestamp;
+	tui_message_history[tui_message_history_count].style = message_style_from_text(normalized);
+	strlcpy(tui_message_history[tui_message_history_count].text,
+			normalized,
+			sizeof(tui_message_history[tui_message_history_count].text));
+	tui_message_history_count++;
+	strlcpy(tui_message_history_last, normalized, sizeof(tui_message_history_last));
+}
+
+static void append_tui_message_history_now(const char * message)
+{
+	append_tui_message_history(message, time(NULL));
+	if (use_ncurses_tui)
+	{
+		if (!(tui_state.focus == 2 && !tui_state.msg_follow_latest))
+			set_message_follow_latest(1);
+		render_output_view(0);
+	}
+}
+
+static void reset_hopper_reject_state(void)
+{
+	hopper_reject_count = 0;
+	hopper_reject_total = 0;
+	hopper_reject_card = -1;
+	hopper_reject_value = 0;
+	hopper_reject_is_freq = 0;
+	hopper_event_pending = 0;
+	hopper_refused_count = 0;
+	hopper_validated_count = 0;
+	hopper_reject_notice_emitted = 0;
+}
+
+static void reset_hopper_scan_list(void)
+{
+	if (lopt.band_mode == BAND_MODE_AX)
+	{
+		int * fresh_freqs = NULL;
+
+		memcpy(ax_all_chans, ax_all_chans_base, sizeof(ax_all_chans_base));
+		memcpy(ax_chans, ax_chans_base, sizeof(ax_chans_base));
+		if (build_ax_frequency_list(&fresh_freqs))
+		{
+			if (lopt.own_frequencies != NULL)
+				free(lopt.own_frequencies);
+			lopt.own_frequencies = fresh_freqs;
+			lopt.channels = (int *) ax_chans;
+			lopt.freqoption = 1;
+			lopt.chanoption = 0;
+		}
+	}
+	else if (lopt.band_mode == BAND_MODE_A)
+	{
+		memcpy(a_chans, a_chans_base, sizeof(a_chans_base));
+		lopt.channels = (int *) a_chans;
+		lopt.freqoption = 0;
+		lopt.chanoption = 1;
+	}
+	else
+	{
+		memcpy(bg_chans, bg_chans_base, sizeof(bg_chans_base));
+		lopt.channels = (int *) bg_chans;
+		lopt.freqoption = 0;
+		lopt.chanoption = 1;
+	}
+}
+
+static int refresh_hopper_after_regdom_change(void)
+{
+	int hopper_was_running = (hopper_pid > 0);
+
+	if (hopper_was_running)
+		stop_hopper();
+
+	reset_hopper_scan_list();
+	reset_hopper_reject_state();
+
+	if (hopper_was_running)
+	{
+		if (!resume_hopper())
+			return (0);
+	}
+
+	return (1);
+}
+
+static void record_hopper_refused_target(int value, int is_freq)
+{
+	sig_atomic_t i;
+	sig_atomic_t count;
+
+	if (value <= 0) return;
+	count = hopper_refused_count;
+	for (i = 0; i < count; i++)
+	{
+		if (hopper_refused_values[i] == value
+			&& hopper_refused_is_freq[i] == is_freq)
+			return;
+	}
+	if (count >= (sig_atomic_t) ArrayCount(hopper_refused_values))
+		return;
+	hopper_refused_values[count] = value;
+	hopper_refused_is_freq[count] = is_freq;
+	hopper_refused_count = count + 1;
+}
+
+static int hopper_target_refused(int value, int is_freq)
+{
+	sig_atomic_t i;
+	sig_atomic_t count;
+
+	if (value <= 0) return (0);
+	count = hopper_refused_count;
+	for (i = 0; i < count; i++)
+	{
+		if (hopper_refused_values[i] == value
+			&& hopper_refused_is_freq[i] == is_freq)
+			return (1);
+	}
+	return (0);
+}
+
+static void record_hopper_validated_target(int value, int is_freq)
+{
+	sig_atomic_t i;
+	sig_atomic_t count;
+
+	if (value <= 0) return;
+	count = hopper_validated_count;
+	for (i = 0; i < count; i++)
+	{
+		if (hopper_validated_values[i] == value
+			&& hopper_validated_is_freq[i] == is_freq)
+			return;
+	}
+	if (count >= (sig_atomic_t) ArrayCount(hopper_validated_values))
+		return;
+	hopper_validated_values[count] = value;
+	hopper_validated_is_freq[count] = is_freq;
+	hopper_validated_count = count + 1;
+}
+
+static int hopper_target_validated(int value, int is_freq)
+{
+	sig_atomic_t i;
+	sig_atomic_t count;
+
+	if (value <= 0) return (0);
+	count = hopper_validated_count;
+	for (i = 0; i < count; i++)
+	{
+		if (hopper_validated_values[i] == value
+			&& hopper_validated_is_freq[i] == is_freq)
+			return (1);
+	}
+	return (0);
+}
+
+static size_t get_allowed_ax_frequencies(int * freqs, size_t max_freqs)
+{
+	FILE * fp;
+	char line[256];
+	size_t count = 0;
+
+	if (freqs == NULL || max_freqs == 0) return (0);
+
+	fp = popen("iw list 2>/dev/null", "r");
+	if (fp == NULL) return (0);
+
+	while (fgets(line, sizeof(line), fp) != NULL)
+	{
+		char * p = line;
+		int freq;
+		size_t i;
+		int duplicate = 0;
+
+		while (isspace((unsigned char) *p))
+			p++;
+		if (strncmp(p, "Band ", 5) == 0) continue;
+
+		if (*p != '*') continue;
+		p++;
+		while (isspace((unsigned char) *p))
+			p++;
+		if (sscanf(p, "%d", &freq) != 1) continue;
+		if (freq < 5925 || freq > 7125) continue;
+
+		for (i = 0; i < count; i++)
+		{
+			if (freqs[i] == freq)
+			{
+				duplicate = 1;
+				break;
+			}
+		}
+		if (duplicate) continue;
+		freqs[count++] = freq;
+		if (count == max_freqs) break;
+	}
+
+	pclose(fp);
+	return (count);
+}
+
+static int ax_frequency_in_hopper_list(int frequency)
+{
+	int i;
+
+	if (frequency <= 0 || lopt.own_frequencies == NULL) return (0);
+	for (i = 0; lopt.own_frequencies[i] != 0; i++)
+	{
+		if (lopt.own_frequencies[i] == frequency)
+			return (1);
+	}
+	return (0);
+}
+
+static int compare_channel_status_entries(const void * lhs, const void * rhs)
+{
+	const struct airodump_tui_channel_entry * a = lhs;
+	const struct airodump_tui_channel_entry * b = rhs;
+
+	if (a->channel != b->channel)
+		return (a->channel - b->channel);
+	return (a->frequency - b->frequency);
+}
+
+static void process_hopper_event(int card, int value)
+{
+	if (card == -1)
+	{
+		regdom_refresh_pending = 1;
+		return;
+	}
+
+	if (card < 0 || (size_t) card >= ArrayCount(lopt.frequency))
+		return;
+
+	if (value < 0)
+	{
+		int refused_value = -value;
+		int is_freq = lopt.freqoption ? 1 : 0;
+
+		hopper_reject_card = card;
+		hopper_reject_value = refused_value;
+		hopper_reject_is_freq = is_freq;
+		hopper_reject_count++;
+		hopper_reject_seq++;
+		hopper_event_pending = 1;
+		record_hopper_refused_target(refused_value, is_freq);
+	}
+	else if (lopt.freqoption)
+	{
+		lopt.frequency[card] = value;
+		record_hopper_validated_target(value, 1);
+	}
+	else
+	{
+		lopt.channel[card] = value;
+		lopt.frequency[card] = channel_to_frequency(lopt.channel[card]);
+		record_hopper_validated_target(value, 0);
+	}
+}
+
+static size_t build_channel_status_entries(struct airodump_tui_channel_entry * entries,
+										   size_t max_entries)
+{
+	const int * channels;
+	size_t count = 0;
+	int is_freq = 0;
+	int i;
+
+	if (entries == NULL || max_entries == 0) return (0);
+
+	if (lopt.band_mode == BAND_MODE_AX)
+	{
+		channels = ax_chans;
+		is_freq = 1;
+	}
+	else if (lopt.band_mode == BAND_MODE_A)
+		channels = a_chans;
+	else if (lopt.band_mode == BAND_MODE_BG)
+		channels = bg_chans;
+	else
+		channels = lopt.channels;
+
+	if (channels == NULL) return (0);
+
+	for (i = 0; channels[i] != 0 && count < max_entries; i++)
+	{
+		int channel = channels[i];
+		int frequency;
+		int refused_value;
+		int available = 1;
+		int validated = 0;
+
+		if (channel < 0) continue;
+		if (lopt.band_mode == BAND_MODE_AX)
+			frequency = channel_to_frequency_ax(channel);
+		else
+			frequency = getFrequencyFromChannel(channel);
+		if (frequency <= 0)
+			frequency = channel_to_frequency(channel);
+		refused_value = is_freq ? frequency : channel;
+		validated = hopper_target_validated(refused_value, is_freq);
+		if (lopt.band_mode == BAND_MODE_AX)
+			available = ax_frequency_in_hopper_list(frequency);
+
+		entries[count].channel = channel;
+		entries[count].frequency = frequency;
+		entries[count].validated = validated;
+		if (hopper_target_refused(refused_value, is_freq))
+			entries[count].status = AIRODUMP_TUI_CHANNEL_STATUS_REFUSED;
+		else if (!available)
+			entries[count].status = AIRODUMP_TUI_CHANNEL_STATUS_UNAVAILABLE;
+		else
+			entries[count].status = AIRODUMP_TUI_CHANNEL_STATUS_OK;
+		count++;
+	}
+
+	qsort(entries, count, sizeof(entries[0]), compare_channel_status_entries);
+	return (count);
+}
+
+static void update_hopper_reject_message(void)
+{
+	static sig_atomic_t last_seq = 0;
+	sig_atomic_t seq;
+	const char * notice = "One or more channels failed to tune. Check your regdom and press v to see which channels failed";
+
+	seq = hopper_reject_seq;
+	if (seq == 0 || seq == last_seq) return;
+
+	last_seq = seq;
+	lopt.message[0] = '\0';
+
+	if (!hopper_reject_notice_emitted)
+	{
+		append_tui_message_history(notice, time(NULL));
+		hopper_reject_notice_emitted = 1;
+	}
+}
+
+static void set_channel_entry_prompt(void)
+{
+	if (channel_entry_mode == INPUT_ENTRY_REGDOM)
+	{
+		snprintf(channel_entry_prompt,
+				 sizeof(channel_entry_prompt),
+				 "set regdom: %s_",
+				 channel_entry_buf);
+	}
+	else
+	{
+		snprintf(channel_entry_prompt,
+				 sizeof(channel_entry_prompt),
+				 "select channel for %s: %s_",
+				 band_mode_label(lopt.band_mode),
+				 channel_entry_buf);
+	}
+}
+
+static int set_kernel_regdom(const char * country)
+{
+	char cmd[64];
+	int rc;
+
+	if (country == NULL || strlen(country) != 2) return (0);
+	get_cached_regdom(1);
+
+	snprintf(cmd, sizeof(cmd), "iw reg set %s >/dev/null 2>&1", country);
+	rc = system(cmd);
+	if (rc != 0)
+		return (0);
+
+	regdom_refresh_pending = 1;
+	get_cached_regdom(1);
+	if (!refresh_hopper_after_regdom_change())
+		return (0);
+	return (1);
+}
+
+static int get_active_phy_index(void)
+{
+	const char * ifname = NULL;
+	char path[PATH_MAX];
+	char phy_name[32];
+	FILE * fp;
+	int phy = -1;
+	size_t len;
+
+	if (g_wi != NULL && g_wi[0] != NULL)
+		ifname = wi_get_ifname(g_wi[0]);
+	if (ifname == NULL || ifname[0] == '\0')
+		ifname = lopt.s_iface;
+	if (ifname == NULL || ifname[0] == '\0')
+		return (-1);
+
+	len = strcspn(ifname, ",");
+	if (len == 0 || len >= 64)
+		return (-1);
+	snprintf(path,
+			 sizeof(path),
+			 "/sys/class/net/%.*s/phy80211/name",
+			 (int) len,
+			 ifname);
+
+	fp = fopen(path, "r");
+	if (fp == NULL) return (-1);
+	if (fgets(phy_name, sizeof(phy_name), fp) != NULL
+		&& sscanf(phy_name, "phy%d", &phy) == 1)
+	{
+		fclose(fp);
+		return (phy);
+	}
+	fclose(fp);
+	return (-1);
+}
+
+static int get_kernel_regdom(char * out, size_t out_len, int * self_managed)
+{
+	FILE * fp;
+	char line[256];
+	char global[16];
+	char phy_actual[16];
+	int phy_self_managed = 0;
+	int active_phy;
+	int current_phy = -2;
+
+	if (out == NULL || out_len == 0) return (0);
+	out[0] = '\0';
+	if (self_managed != NULL)
+		*self_managed = 0;
+	global[0] = '\0';
+	phy_actual[0] = '\0';
+	active_phy = get_active_phy_index();
+
+	fp = popen("iw reg get 2>/dev/null", "r");
+	if (fp == NULL) return (0);
+
+	while (fgets(line, sizeof(line), fp) != NULL)
+	{
+		char * p = line;
+		int phy;
+
+		while (isspace((unsigned char) *p))
+			p++;
+		if (strstr(p, "self-managed") != NULL)
+		{
+			if (current_phy == active_phy && self_managed != NULL)
+				*self_managed = 1;
+			phy_self_managed = 1;
+		}
+		if (strncmp(p, "global", 6) == 0)
+		{
+			current_phy = -1;
+			continue;
+		}
+		if (sscanf(p, "phy#%d", &phy) == 1)
+		{
+			current_phy = phy;
+			continue;
+		}
+		if (strncmp(p, "country ", 8) != 0) continue;
+		p += 8;
+		if (isalnum((unsigned char) p[0]) && isalnum((unsigned char) p[1]))
+		{
+			char code[3];
+
+			code[0] = (char) toupper((unsigned char) p[0]);
+			code[1] = (char) toupper((unsigned char) p[1]);
+			code[2] = '\0';
+			if (current_phy == active_phy)
+			{
+				strlcpy(phy_actual, code, sizeof(phy_actual));
+				if (self_managed != NULL && global[0] != '\0'
+					&& strcmp(code, global) != 0)
+					*self_managed = 1;
+				if (phy_self_managed && self_managed != NULL)
+					*self_managed = 1;
+			}
+			else if (current_phy == -1)
+				strlcpy(global, code, sizeof(global));
+		}
+	}
+
+	pclose(fp);
+	if (self_managed != NULL && phy_actual[0] != '\0' && global[0] != '\0'
+		&& strcmp(phy_actual, global) != 0)
+		*self_managed = 1;
+	if (phy_actual[0] != '\0')
+		strlcpy(out, phy_actual, out_len);
+	else if (global[0] != '\0')
+		strlcpy(out, global, out_len);
+	else
+		return (0);
+	return (1);
+}
+
+static void cache_kernel_regdom(const char * regdom, int self_managed)
+{
+	if (regdom == NULL || regdom[0] == '\0') return;
+	strlcpy(cached_regdom, regdom, sizeof(cached_regdom));
+	cached_regdom_self_managed = self_managed ? 1 : 0;
+	regdom_refresh_pending = 0;
+}
+
+static const char * get_cached_regdom(int force_refresh)
+{
+	char current[16];
+	int self_managed = 0;
+
+	if ((force_refresh || regdom_refresh_pending || cached_regdom[0] == '\0')
+		&& get_kernel_regdom(current, sizeof(current), &self_managed))
+	{
+		cache_kernel_regdom(current, self_managed);
+	}
+	else if (force_refresh || regdom_refresh_pending)
+	{
+		regdom_refresh_pending = 0;
+	}
+	if (cached_regdom[0] == '\0')
+	{
+		strlcpy(cached_regdom, "unknown", sizeof(cached_regdom));
+		cached_regdom_self_managed = 0;
+	}
+	return (cached_regdom);
+}
+
+static int get_cached_regdom_self_managed(void)
+{
+	return (cached_regdom_self_managed != 0);
+}
+
+static void render_output(void)
+{
+	render_output_view(1);
+}
+
+static void render_output_view(int record_message_history)
+{
+	update_hopper_reject_message();
+
+	if (use_ncurses_tui)
+	{
+		struct airodump_tui_view view;
+		char regdom_label[16];
+		struct airodump_tui_channel_entry channel_status[AIRODUMP_TUI_MAX_CHANNEL_STATUS];
+
+		memset(&view, 0, sizeof(view));
+		view.ap_1st = lopt.ap_1st;
+		view.ap_end = lopt.ap_end;
+		view.st_1st = lopt.st_1st;
+		view.selected_ap = lopt.p_selected_ap;
+		view.f_encrypt = lopt.f_encrypt;
+		view.min_pkts = lopt.min_pkts;
+		view.berlin = lopt.berlin;
+		view.asso_client = lopt.asso_client;
+		view.show_ap = lopt.show_ap;
+		view.show_sta = lopt.show_sta;
+		view.show_ack = lopt.show_ack;
+		view.singlechan = lopt.singlechan;
+		view.show_uptime = lopt.show_uptime;
+		view.show_manufacturer = lopt.show_manufacturer;
+		view.show_wps = lopt.show_wps;
+		view.freqoption = lopt.freqoption;
+		view.show_ax_channels = (lopt.band_mode == BAND_MODE_AX);
+		view.band_label = band_mode_label(lopt.band_mode);
+		strlcpy(regdom_label, get_cached_regdom(0), sizeof(regdom_label));
+		view.regdom_label = regdom_label;
+		view.regdom_self_managed = get_cached_regdom_self_managed();
+		view.channel_status = channel_status;
+		view.channel_status_count = build_channel_status_entries(
+			channel_status,
+			ArrayCount(channel_status));
+		view.num_cards = lopt.num_cards;
+		memcpy(view.channel, lopt.channel, sizeof(view.channel));
+		memcpy(view.frequency, lopt.frequency, sizeof(view.frequency));
+		if (channel_entry_active)
+			view.message = channel_entry_prompt;
+		else
+			view.message = lopt.message;
+		view.batt = lopt.batt;
+		view.elapsed_time = lopt.elapsed_time;
+		view.do_pause = lopt.do_pause;
+		view.background_mode = lopt.background_mode;
+		view.sort_by = lopt.sort_by;
+		view.sort_inv = lopt.sort_inv;
+
+		if (record_message_history)
+			record_tui_message_history();
+		view.messages = tui_message_history;
+		view.message_count = tui_message_history_count;
+		airodump_tui_render(&tui_state, &view);
+	}
+	else
+	{
+		dump_print(lopt.ws.ws_row, lopt.ws.ws_col, lopt.num_cards);
+	}
+}
+
+static void restore_terminal(void)
+{
+	if (use_ncurses_tui)
+	{
+		airodump_tui_stop(&tui_state);
+	}
+	else
+	{
+		reset_term();
+		show_cursor();
+	}
+
+}
+
+static void set_message_follow_latest(int follow_latest)
+{
+	tui_state.msg_follow_latest = follow_latest ? 1 : 0;
+}
+
+static int tui_message_pane_visible(void)
+{
+	return (use_ncurses_tui && lopt.show_ap && tui_state.cols >= 90);
+}
+
+static void cycle_tui_focus(int direction)
+{
+	int order[3];
+	int count = 0;
+	int i;
+
+	if (lopt.show_ap)
+		order[count++] = 0;
+	if (tui_message_pane_visible())
+		order[count++] = 2;
+	if (lopt.show_sta)
+		order[count++] = 1;
+	if (count == 0) return;
+
+	for (i = 0; i < count; i++)
+	{
+		if (order[i] == tui_state.focus)
+		{
+			i = (i + direction + count) % count;
+			set_tui_focus(order[i]);
+			return;
+		}
+	}
+
+	set_tui_focus(order[0]);
+}
+
+static void set_tui_focus(int focus)
+{
+	if (tui_message_pane_visible())
+	{
+		if (focus < 0) focus = 0;
+		if (focus > 2) focus = 2;
+		if (focus == 2 && !tui_message_pane_visible()) focus = 0;
+	}
+	else if (lopt.show_ap == 1 && lopt.show_sta == 1)
+	{
+		focus = (focus != 0) ? 1 : 0;
+	}
+	else
+	{
+		focus = (lopt.show_sta == 1) ? 1 : 0;
+	}
+	tui_state.focus = focus;
+}
+
+static void set_selected_ap(struct AP_info * ap, int selection_direction)
+{
+	lopt.p_selected_ap = ap;
+	lopt.en_selection_direction = selection_direction;
+	if (ap != NULL)
+		memcpy(lopt.selected_bssid, ap->bssid, 6);
+	else
+		memset(lopt.selected_bssid, '\x00', 6);
+}
+
+static const char * station_sort_field_name(int sort_by)
+{
+	switch (sort_by)
+	{
+		case STA_SORT_BY_NOTHING:
+			return ("none");
+		case STA_SORT_BY_BSSID:
+			return ("BSSID");
+		case STA_SORT_BY_STATION:
+			return ("station MAC");
+		case STA_SORT_BY_BAND:
+			return ("band");
+		case STA_SORT_BY_LA:
+			return ("locally administered");
+		case STA_SORT_BY_POWER:
+			return ("power");
+		case STA_SORT_BY_RATE:
+			return ("rate");
+		case STA_SORT_BY_LOST:
+			return ("lost");
+		case STA_SORT_BY_FRAMES:
+			return ("frames");
+		case STA_SORT_BY_NOTES:
+			return ("notes");
+		case STA_SORT_BY_PROBES:
+			return ("probes");
+		case STA_SORT_BY_LAST_SEEN:
+			return ("last seen");
+		default:
+			return ("first seen");
+	}
+}
+
+static const char * ap_sort_field_name(int sort_by)
+{
+	switch (sort_by)
+	{
+		case SORT_BY_NOTHING:
+			return ("none");
+		case SORT_BY_BSSID:
+			return ("BSSID");
+		case SORT_BY_POWER:
+			return ("power");
+		case SORT_BY_BEACON:
+			return ("beacons");
+		case SORT_BY_DATA:
+			return ("data");
+		case SORT_BY_PRATE:
+			return ("rate");
+		case SORT_BY_CHAN:
+			return ("channel");
+		case SORT_BY_STAS:
+			return ("stations");
+		case SORT_BY_MBIT:
+			return ("Mbit");
+		case SORT_BY_ENC:
+			return ("ENC");
+		case SORT_BY_CIPHER:
+			return ("cipher");
+		case SORT_BY_AUTH:
+			return ("auth");
+		case SORT_BY_ESSID:
+			return ("ESSID");
+		default:
+			return ("unknown");
+	}
+}
+
+static int cycle_station_sort_field(int sort_by, int direction)
+{
+	return (airodump_tui_cycle_station_sort_field(sort_by, direction));
+}
+
+static int cycle_ap_sort_field(int sort_by, int direction)
+{
+	return (airodump_tui_cycle_ap_sort_field(sort_by, direction));
+}
+
+static int ap_security_std_rank(unsigned int security)
+{
+	if (security & STD_OPN) return (0);
+	if (security & STD_WEP) return (1);
+	if (security & STD_WPA) return (2);
+	if (security & STD_WPA2)
+	{
+		if ((security & AUTH_SAE) && (security & AUTH_PSK))
+			return (4);
+		if (security & AUTH_SAE)
+			return (5);
+		if (security & AUTH_OWE)
+			return (6);
+		return (3);
+	}
+	return (7);
+}
+
+static int ap_security_cipher_rank(unsigned int security)
+{
+	if ((security & ENC_FIELD) == 0) return (0);
+	if (security & ENC_WEP) return (1);
+	if (security & ENC_WEP40) return (2);
+	if (security & ENC_WEP104) return (3);
+	if (security & ENC_TKIP) return (4);
+	if (security & ENC_CCMP) return (5);
+	if (security & ENC_WRAP) return (6);
+	if (security & ENC_GCMP) return (7);
+	if (security & ENC_GMAC) return (8);
+	return (9);
+}
+
+static int ap_security_auth_rank(unsigned int security)
+{
+	if ((security & AUTH_FIELD) == 0) return (0);
+	if (security & AUTH_OPN) return (1);
+	if ((security & AUTH_SAE) && (security & AUTH_PSK))
+		return (3);
+	if (security & AUTH_PSK) return (2);
+	if (security & AUTH_MGT) return (4);
+	if (security & AUTH_CMAC) return (5);
+	if (security & AUTH_SAE) return (6);
+	if (security & AUTH_OWE) return (7);
+	return (8);
+}
+
+static const char * ap_security_std_label(unsigned int security)
+{
+	if (security & STD_WPA2)
+	{
+		if ((security & AUTH_SAE) && (security & AUTH_PSK))
+			return ("WPA2/3");
+		if (security & AUTH_SAE)
+			return ("WPA3");
+		if (security & AUTH_OWE)
+			return ("OWE");
+		return ("WPA2");
+	}
+	if (security & STD_WPA) return ("WPA");
+	if (security & STD_WEP) return ("WEP");
+	if (security & STD_OPN) return ("OPN");
+	return ("");
+}
+
+static int ap_station_count_rank(const struct AP_info * ap)
+{
+	if (ap == NULL || ap->bss_load_station_count < 0) return (-1);
+	return (ap->bss_load_station_count);
+}
+
+static int ap_essid_compare(const struct AP_info * lhs, const struct AP_info * rhs)
+{
+	size_t lhs_len;
+	size_t rhs_len;
+	size_t min_len;
+	int cmp;
+
+	if (lhs == NULL || rhs == NULL) return (0);
+
+	lhs_len = strnlen((const char *) lhs->essid, ESSID_LENGTH);
+	rhs_len = strnlen((const char *) rhs->essid, ESSID_LENGTH);
+
+	if (lhs_len == 0 && rhs_len != 0) return (1);
+	if (lhs_len != 0 && rhs_len == 0) return (-1);
+
+	min_len = MIN(lhs_len, rhs_len);
+	cmp = strncasecmp((const char *) lhs->essid, (const char *) rhs->essid, min_len);
+	if (cmp != 0) return (cmp);
+
+	if (lhs_len != rhs_len) return ((lhs_len < rhs_len) ? -1 : 1);
+
+	cmp = strncasecmp((const char *) lhs->essid, (const char *) rhs->essid, ESSID_LENGTH);
+	if (cmp != 0) return (cmp);
+
+	return (memcmp(lhs->bssid, rhs->bssid, 6));
+}
+
+static int ap_band_mode(const struct AP_info * ap)
+{
+	if (ap == NULL) return (0);
+
+	switch (ap->band)
+	{
+		case 24:
+			return (BAND_MODE_BG);
+		case 5:
+			return (BAND_MODE_A);
+		case 6:
+			return (BAND_MODE_AX);
+		default:
+			return (band_from_frequency_or_channel(0, ap->channel));
+	}
+}
+
+static int ensure_band_mode(int band_mode)
+{
+	int i;
+
+	if (band_mode <= 0 || band_mode == lopt.band_mode)
+		return (1);
+	if (!band_mode_is_supported(band_mode))
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ %s is not supported by this card",
+				 band_mode_label(band_mode));
+		append_tui_message_history_now(lopt.message);
+		return (0);
+	}
+
+	for (i = 0; i < 3 && lopt.band_mode != band_mode; i++)
+	{
+		if (!switch_band(1))
+			return (0);
+	}
+
+	if (lopt.band_mode != band_mode)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ unable to switch to %s",
+				 band_mode_label(band_mode));
+		append_tui_message_history_now(lopt.message);
+		return (0);
+	}
+
+	return (1);
+}
+
+static char * csv_escape_field(const unsigned char * input, size_t len)
+{
+	size_t i;
+	size_t out_len = 3; /* quotes + NUL */
+	char * out;
+	char * cursor;
+
+	if (input == NULL) return (NULL);
+
+	for (i = 0; i < len; i++)
+	{
+		out_len += 1;
+		if (input[i] == '"') out_len++;
+	}
+
+	out = (char *) malloc(out_len);
+	ALLEGE(out != NULL);
+
+	cursor = out;
+	*cursor++ = '"';
+	for (i = 0; i < len; i++)
+	{
+		if (input[i] == '"') *cursor++ = '"';
+		*cursor++ = (char) input[i];
+	}
+	*cursor++ = '"';
+	*cursor = '\0';
+
+	return (out);
+}
+
+static struct probe_log_entry * find_probe_log_entry(const unsigned char * probe,
+													 size_t len)
+{
+	struct probe_log_entry * entry = probe_log_entries;
+
+	while (entry != NULL)
+	{
+		if (entry->essid_len == len && memcmp(entry->essid, probe, len) == 0)
+			return (entry);
+		entry = entry->next;
+	}
+
+	return (NULL);
+}
+
+static void format_probe_timestamp(char * out, size_t out_len, time_t ts)
+{
+	struct tm * ltime;
+
+	if (out == NULL || out_len == 0) return;
+
+	ltime = localtime(&ts);
+	if (ltime != NULL
+		&& strftime(out, out_len, "%Y-%m-%d %H:%M:%S", ltime) > 0)
+	{
+		return;
+	}
+
+	snprintf(out, out_len, "%ld", (long) ts);
+}
+
+static void rewrite_probe_log_csv(void)
+{
+	const struct probe_log_entry * entry;
+	char first_seen[32];
+	char last_seen[32];
+	char * essid_csv;
+
+	if (!opt.output_format_probes || opt.f_probes == NULL) return;
+
+	fflush(opt.f_probes);
+	rewind(opt.f_probes);
+	if (ftruncate(fileno(opt.f_probes), 0) != 0)
+	{
+		perror("ftruncate failed");
+		return;
+	}
+
+	fprintf(opt.f_probes,
+			"First seen,Last seen,Station MAC,Times seen,Probe ESSID\r\n");
+
+	entry = probe_log_entries;
+	while (entry != NULL)
+	{
+		format_probe_timestamp(first_seen, sizeof(first_seen), entry->first_seen);
+		format_probe_timestamp(last_seen, sizeof(last_seen), entry->last_seen);
+		essid_csv = csv_escape_field(entry->essid, entry->essid_len);
+		if (essid_csv != NULL)
+		{
+			fprintf(opt.f_probes,
+					"%s,%s,%02X:%02X:%02X:%02X:%02X:%02X,%lu,%s\r\n",
+					first_seen,
+					last_seen,
+					entry->station_mac[0],
+					entry->station_mac[1],
+					entry->station_mac[2],
+					entry->station_mac[3],
+					entry->station_mac[4],
+					entry->station_mac[5],
+					entry->times_seen,
+					essid_csv);
+			free(essid_csv);
+		}
+		entry = entry->next;
+	}
+
+	fflush(opt.f_probes);
+}
+
+static void free_probe_log_entries(void)
+{
+	struct probe_log_entry * entry = probe_log_entries;
+
+	while (entry != NULL)
+	{
+		struct probe_log_entry * next = entry->next;
+		free(entry);
+		entry = next;
+	}
+
+	probe_log_entries = NULL;
+}
+
+static void log_distinct_probe_essid(const struct ST_info * st_cur,
+									 const unsigned char * probe,
+									 size_t len)
+{
+	struct probe_log_entry * entry;
+	time_t seen_ts;
+
+	if (st_cur == NULL || probe == NULL || len == 0) return;
+	if (!opt.output_format_probes || opt.f_probes == NULL) return;
+
+	seen_ts = (st_cur->tlast != 0) ? st_cur->tlast : time(NULL);
+	entry = find_probe_log_entry(probe, len);
+	if (entry == NULL)
+	{
+		entry = (struct probe_log_entry *) calloc(1, sizeof(*entry));
+		ALLEGE(entry != NULL);
+		entry->next = probe_log_entries;
+		probe_log_entries = entry;
+		entry->first_seen = seen_ts;
+		entry->essid_len = len;
+		memcpy(entry->essid, probe, len);
+		entry->essid[len] = '\0';
+	}
+
+	entry->last_seen = seen_ts;
+	entry->times_seen++;
+	memcpy(entry->station_mac, st_cur->stmac, sizeof(entry->station_mac));
+	rewrite_probe_log_csv();
+}
+
+static int deauth_mfp_guard(struct AP_info * ap_cur)
+{
+	if (ap_cur == NULL) return (0);
+
+	if (ap_cur->mfp_required || (ap_cur->security & AUTH_SAE))
+	{
+		ap_cur->mfp_warned = 1;
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ Selected AP requires MFP; press d again to continue");
+		append_tui_message_history_now(lopt.message);
+		return (1);
+	}
+
+	if (ap_cur->mfp_capable && !ap_cur->mfp_warned)
+	{
+		ap_cur->mfp_warned = 1;
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ Selected AP advertises optional MFP; deauth may fail");
+		append_tui_message_history_now(lopt.message);
+		return (1);
+	}
+
+	return (0);
+}
+
+static int deauth_is_unassociated_ap(const struct AP_info * ap_cur)
+{
+	return (ap_cur != NULL && memcmp(ap_cur->bssid, BROADCAST, 6) == 0);
+}
+
+static void deauth_refuse_with_message(const char * reason)
+{
+	snprintf(lopt.message, sizeof(lopt.message), "][ Deauth refused: %s", reason);
+	append_tui_message_history_now(lopt.message);
+}
+
+static int point_in_box(int x, int y, int top, int left, int height, int width)
+{
+	return (height > 0 && width > 0 && y >= top && y < top + height
+			&& x >= left && x < left + width);
+}
+
+static int mouse_target_focus(int x, int y)
+{
+	if (point_in_box(x,
+					 y,
+					 tui_state.msg_box_top,
+					 tui_state.msg_box_left,
+					 tui_state.msg_box_height,
+					 tui_state.msg_box_width))
+	{
+		return (2);
+	}
+	if (point_in_box(x,
+					 y,
+					 tui_state.sta_box_top,
+					 tui_state.sta_box_left,
+					 tui_state.sta_box_height,
+					 tui_state.sta_box_width))
+	{
+		return (1);
+	}
+	if (point_in_box(x,
+					 y,
+					 tui_state.ap_box_top,
+					 tui_state.ap_box_left,
+					 tui_state.ap_box_height,
+					 tui_state.ap_box_width))
+	{
+		return (0);
+	}
+	return (tui_state.focus);
+}
+
+static struct AP_info * pick_ap_from_mouse(int x, int y)
+{
+	struct AP_info * ap_cur;
+	struct AP_info * ap_rows[4096];
+	size_t ap_count = 0;
+	size_t ap_scroll = 0;
+	size_t selected_index = 0;
+	size_t i;
+	size_t row_index;
+	size_t visible_rows;
+
+	if (!use_ncurses_tui || !lopt.show_ap || tui_state.ap_box_width < 1
+		|| tui_state.ap_box_height < 1)
+	{
+		return (NULL);
+	}
+
+	if (!point_in_box(x,
+					 y,
+					 tui_state.ap_box_top,
+					 tui_state.ap_box_left,
+					 tui_state.ap_box_height,
+					 tui_state.ap_box_width))
+	{
+		return (NULL);
+	}
+
+	if (x < tui_state.ap_box_left + 1 || x >= tui_state.ap_box_left + tui_state.ap_box_width - 1)
+		return (NULL);
+	if (y < tui_state.ap_box_top + 3)
+		return (NULL);
+
+	visible_rows = (size_t) tui_state.ap_visible_rows;
+	if (visible_rows == 0) return (NULL);
+
+	ap_cur = lopt.ap_end;
+	while (ap_cur != NULL)
+	{
+		if (!IsAp2BeSkipped(ap_cur))
+		{
+			if (ap_count < sizeof(ap_rows) / sizeof(ap_rows[0]))
+				ap_rows[ap_count++] = ap_cur;
+		}
+		ap_cur = ap_cur->prev;
+	}
+
+	if (has_unassociated_clients())
+	{
+		ap_cur = find_unassociated_ap();
+		if (ap_cur != NULL && ap_count < sizeof(ap_rows) / sizeof(ap_rows[0]))
+			ap_rows[ap_count++] = ap_cur;
+	}
+
+	if (ap_count == 0) return (NULL);
+
+	if (lopt.p_selected_ap != NULL)
+	{
+		for (i = 0; i < ap_count; i++)
+		{
+			if (ap_rows[i] == lopt.p_selected_ap)
+			{
+				selected_index = i;
+				break;
+			}
+		}
+	}
+
+	ap_scroll = (size_t) tui_state.ap_scroll;
+	if (ap_scroll > ap_count - 1)
+		ap_scroll = ap_count - 1;
+	if (lopt.p_selected_ap != NULL)
+	{
+		if (ap_scroll > selected_index)
+			ap_scroll = selected_index;
+		if (selected_index >= ap_scroll + visible_rows)
+			ap_scroll = selected_index - visible_rows + 1;
+	}
+	if (ap_scroll > ap_count - visible_rows)
+		ap_scroll = (ap_count > visible_rows) ? ap_count - visible_rows : 0;
+
+	row_index = (size_t) (y - (tui_state.ap_box_top + 3));
+	if (row_index >= visible_rows) return (NULL);
+	if (ap_scroll + row_index >= ap_count) return (NULL);
+
+	return (ap_rows[ap_scroll + row_index]);
+}
+
+static int handle_mouse_event(void)
+{
+	MEVENT event;
+	struct AP_info * ap_hit;
+	int target_focus;
+	int redraw = 0;
+	int sort_by;
+
+	if (getmouse(&event) != OK) return (0);
+
+	if (event.bstate & BUTTON_SHIFT)
+		return (0);
+
+	target_focus = mouse_target_focus(event.x, event.y);
+
+	if (event.bstate & (BUTTON4_PRESSED | BUTTON4_CLICKED | BUTTON4_DOUBLE_CLICKED))
+	{
+		set_tui_focus(target_focus);
+		if (target_focus == 1)
+		{
+			if (tui_state.sta_scroll > 0)
+				tui_state.sta_scroll--;
+			redraw = 1;
+		}
+		else if (target_focus == 2)
+		{
+			if (tui_state.msg_scroll > 0)
+				tui_state.msg_scroll--;
+			set_message_follow_latest(0);
+			redraw = 1;
+		}
+		else if (tui_state.ap_scroll > 0)
+		{
+			tui_state.ap_scroll--;
+			redraw = 1;
+		}
+		return (redraw);
+	}
+
+	if (event.bstate & (BUTTON5_PRESSED | BUTTON5_CLICKED | BUTTON5_DOUBLE_CLICKED))
+	{
+		set_tui_focus(target_focus);
+		if (target_focus == 1)
+		{
+			tui_state.sta_scroll++;
+			redraw = 1;
+		}
+		else if (target_focus == 2)
+		{
+			tui_state.msg_scroll++;
+			set_message_follow_latest(0);
+			redraw = 1;
+		}
+		else
+		{
+			tui_state.ap_scroll++;
+			redraw = 1;
+		}
+		return (redraw);
+	}
+
+	if ((event.bstate & BUTTON1_PRESSED) == 0)
+	{
+		return (0);
+	}
+
+	{
+		sort_by = airodump_tui_station_sort_field_from_mouse(&tui_state, event.x, event.y);
+
+		if (sort_by != STA_SORT_BY_NOTHING)
+		{
+			tui_state.sta_sort_by = sort_by;
+			tui_state.sta_sort_inv *= -1;
+			if (tui_state.sta_sort_inv == 0) tui_state.sta_sort_inv = 1;
+			snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ sorting stations by %s (%s)",
+					 station_sort_field_name(tui_state.sta_sort_by),
+					 (tui_state.sta_sort_inv < 0) ? "descending" : "ascending");
+			set_tui_focus(1);
+			redraw = 1;
+			return (redraw);
+		}
+	}
+
+	sort_by = airodump_tui_ap_sort_field_from_mouse(&tui_state, event.x, event.y);
+	if (sort_by != SORT_BY_NOTHING)
+	{
+		int old_sort_by = lopt.sort_by;
+
+		lopt.sort_by = sort_by;
+		if (old_sort_by == sort_by)
+			lopt.sort_inv *= -1;
+		else
+			lopt.sort_inv = 1;
+		if (lopt.sort_inv < 0) lopt.sort_inv = -1;
+		else lopt.sort_inv = 1;
+		ALLEGE(pthread_mutex_lock(&(lopt.mx_sort)) == 0);
+		dump_sort();
+		ALLEGE(pthread_mutex_unlock(&(lopt.mx_sort)) == 0);
+		set_tui_focus(0);
+		return (1);
+	}
+
+	if (target_focus == 1)
+	{
+		set_tui_focus(1);
+	}
+
+	ap_hit = pick_ap_from_mouse(event.x, event.y);
+	if (ap_hit != NULL)
+	{
+		set_selected_ap(ap_hit, selection_direction_no);
+		set_tui_focus(0);
+		return (1);
+	}
+
+	if (point_in_box(event.x,
+					 event.y,
+					 tui_state.ap_box_top,
+					 tui_state.ap_box_left,
+					 tui_state.ap_box_height,
+					 tui_state.ap_box_width))
+	{
+		if (event.y >= tui_state.ap_box_top + 3)
+		{
+			set_selected_ap(NULL, selection_direction_no);
+			set_tui_focus(0);
+			return (1);
+		}
+		set_tui_focus(0);
+		return (1);
+	}
+
+	if (point_in_box(event.x,
+					 event.y,
+					 tui_state.msg_box_top,
+					 tui_state.msg_box_left,
+					 tui_state.msg_box_height,
+					 tui_state.msg_box_width))
+	{
+		set_tui_focus(2);
+		return (1);
+	}
+
+	if (point_in_box(event.x,
+					 event.y,
+					 tui_state.sta_box_top,
+					 tui_state.sta_box_left,
+					 tui_state.sta_box_height,
+					 tui_state.sta_box_width))
+	{
+		set_tui_focus(1);
+		return (1);
+	}
+	return (0);
+}
+
+static int handle_keycode(int keycode)
+{
+	int redraw = 0;
+
+	if (keycode == KEY_MOUSE)
+	{
+		if (handle_mouse_event())
+			redraw = 1;
+		goto done;
+	}
+
+	if (channel_entry_active)
+	{
+		if (keycode == 27 || keycode == KEY_ESCAPE)
+		{
+			cancel_channel_entry(channel_entry_mode == INPUT_ENTRY_REGDOM
+									? "][ regdom entry cancelled"
+									: "][ channel entry cancelled");
+			redraw = 1;
+			goto done;
+		}
+
+		if (keycode == '\n' || keycode == '\r' || keycode == KEY_ENTER)
+		{
+			if (channel_entry_mode == INPUT_ENTRY_REGDOM)
+			{
+				if (apply_regdom_entry())
+				{
+					redraw = 1;
+				}
+				else
+				{
+					redraw = 1;
+				}
+			}
+			else if (apply_channel_entry())
+			{
+				redraw = 1;
+			}
+			else
+			{
+				redraw = 1;
+			}
+			goto done;
+		}
+
+		if (keycode == KEY_BACKSPACE || keycode == 127 || keycode == 8)
+		{
+			if (channel_entry_len > 0)
+			{
+				channel_entry_buf[--channel_entry_len] = '\0';
+				set_channel_entry_prompt();
+				if (use_ncurses_tui)
+					render_output_view(0);
+			}
+			goto done;
+		}
+
+		if (channel_entry_mode == INPUT_ENTRY_CHANNEL
+			&& isdigit((unsigned char) keycode))
+		{
+			if (channel_entry_len < sizeof(channel_entry_buf) - 1)
+			{
+				channel_entry_buf[channel_entry_len++] = (char) keycode;
+				channel_entry_buf[channel_entry_len] = '\0';
+				set_channel_entry_prompt();
+				if (use_ncurses_tui)
+					render_output_view(0);
+			}
+		}
+		else if (channel_entry_mode == INPUT_ENTRY_REGDOM
+				 && isalpha((unsigned char) keycode))
+		{
+			if (channel_entry_len < 2)
+			{
+				channel_entry_buf[channel_entry_len++] = (char) toupper((unsigned char) keycode);
+				channel_entry_buf[channel_entry_len] = '\0';
+				set_channel_entry_prompt();
+				if (use_ncurses_tui)
+					render_output_view(0);
+			}
+		}
+		goto done;
+	}
+
+	if (tui_state.help_visible)
+	{
+		tui_state.help_visible = 0;
+		redraw = 1;
+		goto done;
+	}
+
+	if (tui_state.channel_overlay_visible)
+	{
+		if (keycode == 'v' || keycode == 27 || keycode == KEY_ESCAPE)
+		{
+			tui_state.channel_overlay_visible = 0;
+			redraw = 1;
+			goto done;
+		}
+		tui_state.channel_overlay_visible = 0;
+		redraw = 1;
+		goto done;
+	}
+
+	if (keycode == '?' || keycode == KEY_F(1))
+	{
+		tui_state.help_visible = !tui_state.help_visible;
+		tui_state.channel_overlay_visible = 0;
+		redraw = 1;
+		goto done;
+	}
+
+	if (keycode == 'v')
+	{
+		tui_state.channel_overlay_visible = !tui_state.channel_overlay_visible;
+		tui_state.help_visible = 0;
+		redraw = 1;
+		goto done;
+	}
+
+	if (keycode == KEY_q)
+	{
+		quitting_event_ts = time(NULL);
+
+		if (++quitting > 1) //-V1051
+			lopt.do_exit = 1;
+		else
+			snprintf(
+				lopt.message,
+				sizeof(lopt.message),
+				"][ Are you sure you want to quit? Press Q again to quit.");
+		redraw = 1;
+	}
+
+	if (keycode == KEY_o)
+	{
+		tui_state.colors_enabled = !tui_state.colors_enabled;
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ color %s",
+				 tui_state.colors_enabled ? "on" : "off");
+		redraw = 1;
+	}
+
+	if (keycode == KEY_s || keycode == 'S')
+	{
+		int direction = (keycode == 'S') ? -1 : 1;
+
+		if (use_ncurses_tui && tui_state.focus == 1)
+		{
+			tui_state.sta_sort_by = cycle_station_sort_field(tui_state.sta_sort_by, direction);
+			snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ sorting stations by %s (%s)",
+					 station_sort_field_name(tui_state.sta_sort_by),
+					 (tui_state.sta_sort_inv < 0) ? "descending" : "ascending");
+		}
+		else
+		{
+			lopt.sort_by = cycle_ap_sort_field(lopt.sort_by, direction);
+			ALLEGE(pthread_mutex_lock(&(lopt.mx_sort)) == 0);
+			dump_sort();
+			ALLEGE(pthread_mutex_unlock(&(lopt.mx_sort)) == 0);
+			snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ sorting APs by %s (%s)",
+					 ap_sort_field_name(lopt.sort_by),
+					 (lopt.sort_inv < 0) ? "descending" : "ascending");
+		}
+		redraw = 1;
+	}
+
+	if (keycode == KEY_i)
+	{
+		if (use_ncurses_tui && tui_state.focus == 1)
+		{
+			tui_state.sta_sort_inv *= -1;
+			if (tui_state.sta_sort_inv < 0)
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ inverted station sorting order");
+			else
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ normal station sorting order");
+		}
+		else
+		{
+			lopt.sort_inv *= -1;
+			if (lopt.sort_inv < 0)
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ inverted sorting order");
+			else
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ normal sorting order");
+		}
+		redraw = 1;
+	}
+
+	if (keycode == KEY_SPACE)
+	{
+		lopt.do_pause = (lopt.do_pause + 1) % 2;
+		if (lopt.do_pause)
+		{
+			snprintf(lopt.message, sizeof(lopt.message), "][ paused output");
+			ALLEGE(pthread_mutex_lock(&(lopt.mx_print)) == 0);
+
+			render_output();
+
+			ALLEGE(pthread_mutex_unlock(&(lopt.mx_print)) == 0);
+		}
+		else
+			snprintf(lopt.message, sizeof(lopt.message), "][ resumed output");
+		redraw = 1;
+	}
+
+	if (keycode == KEY_r)
+	{
+		resume_hopper();
+		redraw = 1;
+	}
+
+	if (keycode == 'M')
+	{
+		airodump_tui_set_mouse_enabled(&tui_state, !tui_state.mouse_enabled);
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ mouse capture %s",
+				 tui_state.mouse_enabled ? "enabled" : "disabled");
+		redraw = 1;
+	}
+
+	if (keycode == 't')
+	{
+		begin_channel_entry();
+		goto done;
+	}
+
+	if (keycode == 'g')
+	{
+		get_cached_regdom(1);
+		if (get_cached_regdom_self_managed())
+		{
+			snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ Interface's regdom is self-managed, we can't change it :(");
+			append_tui_message_history_now(lopt.message);
+			goto done;
+		}
+		begin_regdom_entry();
+		goto done;
+	}
+
+	if (keycode == 'l')
+	{
+		if (lock_selected_ap_channel())
+			redraw = 1;
+		goto done;
+	}
+
+	if (keycode == 'w')
+	{
+		write_wpa_snapshot();
+		redraw = 1;
+	}
+
+	if (keycode == 'b' || keycode == 'B')
+	{
+		if (switch_band(keycode == 'B' ? -1 : 1))
+			redraw = 1;
+	}
+
+	if (keycode == KEY_d)
+	{
+		deauth_event_ts = time(NULL);
+
+		if (lopt.p_selected_ap != NULL && deauth_is_unassociated_ap(lopt.p_selected_ap))
+		{
+			deauth_launching = 0;
+			deauth_refuse_with_message("Don't be silly");
+			redraw = 1;
+			goto done;
+		}
+
+		if (++deauth_launching > 1) //-V1051
+		{
+			deauth_launching = 0;
+			launch_deauth();
+			redraw = 1;
+		}
+		else
+		{
+			if (lopt.p_selected_ap != NULL
+				&& (lopt.p_selected_ap->mfp_required
+					|| (lopt.p_selected_ap->security & AUTH_SAE)
+					|| (lopt.p_selected_ap->mfp_capable
+						&& !lopt.p_selected_ap->mfp_warned)))
+			{
+				deauth_mfp_guard(lopt.p_selected_ap);
+			}
+			else
+			{
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ Are you sure you want to deauth? Press d again to continue.");
+			}
+			redraw = 1;
+		}
+	}
+
+	if (keycode == KEY_TAB)
+	{
+		cycle_tui_focus(1);
+		redraw = 1;
+	}
+
+	if (keycode == KEY_a)
+	{
+		if (lopt.show_ap == 1 && lopt.show_sta == 1)
+		{
+			lopt.show_sta = 0;
+			tui_state.focus = 0;
+			snprintf(lopt.message, sizeof(lopt.message), "][ display ap only");
+		}
+		else if (lopt.show_ap == 1 && lopt.show_sta == 0)
+		{
+			lopt.show_ap = 0;
+			lopt.show_sta = 1;
+			tui_state.focus = 1;
+			snprintf(lopt.message, sizeof(lopt.message), "][ display sta only");
+		}
+		else
+		{
+			lopt.show_ap = 1;
+			lopt.show_sta = 1;
+			tui_state.focus = 0;
+			snprintf(lopt.message, sizeof(lopt.message), "][ display ap+sta");
+		}
+		redraw = 1;
+	}
+
+	if (keycode == KEY_c)
+	{
+		set_selected_ap(NULL, selection_direction_no);
+		tui_state.ap_scroll = 0;
+		tui_state.sta_scroll = 0;
+		tui_state.msg_scroll = 0;
+		tui_state.focus = 0;
+		redraw = 1;
+	}
+
+done:
+	{
+		if (keycode == KEY_LEFT)
+		{
+			cycle_tui_focus(-1);
+			redraw = 1;
+		}
+		if (keycode == KEY_RIGHT)
+		{
+			cycle_tui_focus(1);
+			redraw = 1;
+		}
+		if (keycode == KEY_RESIZE)
+		{
+			tui_resize_pending = 1;
+			redraw = 1;
+		}
+		if (keycode == KEY_UP)
+		{
+			if (tui_state.focus == 1)
+			{
+				if (tui_state.sta_scroll > 0) tui_state.sta_scroll--;
+				redraw = 1;
+			}
+			else if (tui_state.focus == 2)
+			{
+				if (tui_state.msg_scroll > 0) tui_state.msg_scroll--;
+				set_message_follow_latest(0);
+				redraw = 1;
+			}
+			else if (lopt.p_selected_ap != NULL)
+			{
+				struct AP_info * next_ap = find_tui_visible_ap_relative(lopt.p_selected_ap, -1);
+
+				if (next_ap != NULL)
+				{
+					set_selected_ap(next_ap, selection_direction_up);
+					redraw = 1;
+				}
+			}
+			else
+			{
+				struct AP_info * next_ap = find_visible_ap_from_tail();
+
+				if (next_ap != NULL)
+				{
+					set_selected_ap(next_ap, selection_direction_up);
+					redraw = 1;
+				}
+			}
+		}
+		if (keycode == KEY_DOWN)
+		{
+			if (tui_state.focus == 1)
+			{
+				tui_state.sta_scroll++;
+				redraw = 1;
+			}
+			else if (tui_state.focus == 2)
+			{
+				tui_state.msg_scroll++;
+				if ((size_t) tui_state.msg_scroll
+					>= (tui_message_history_count > (size_t) tui_state.msg_visible_rows
+							? tui_message_history_count - (size_t) tui_state.msg_visible_rows
+							: 0))
+					set_message_follow_latest(1);
+				else
+					set_message_follow_latest(0);
+				redraw = 1;
+			}
+			else if (lopt.p_selected_ap != NULL)
+			{
+				struct AP_info * prev_ap = find_tui_visible_ap_relative(lopt.p_selected_ap, 1);
+
+				if (prev_ap != NULL)
+				{
+					set_selected_ap(prev_ap, selection_direction_down);
+					redraw = 1;
+				}
+			}
+			else
+			{
+				struct AP_info * prev_ap = find_visible_ap_from_head();
+
+				if (prev_ap != NULL)
+				{
+					set_selected_ap(prev_ap, selection_direction_down);
+					redraw = 1;
+				}
+			}
+		}
+		if (keycode == KEY_PPAGE)
+		{
+			if (tui_state.focus == 1)
+			{
+				tui_state.sta_scroll -= MAX(1, tui_state.sta_visible_rows);
+				if (tui_state.sta_scroll < 0) tui_state.sta_scroll = 0;
+			}
+			else if (tui_state.focus == 2)
+			{
+				tui_state.msg_scroll -= MAX(1, tui_state.msg_visible_rows);
+				if (tui_state.msg_scroll < 0) tui_state.msg_scroll = 0;
+				set_message_follow_latest(0);
+			}
+			else
+			{
+				tui_state.ap_scroll -= MAX(1, tui_state.ap_visible_rows);
+				if (tui_state.ap_scroll < 0) tui_state.ap_scroll = 0;
+			}
+			redraw = 1;
+		}
+		if (keycode == KEY_NPAGE)
+		{
+			if (tui_state.focus == 1)
+				tui_state.sta_scroll += MAX(1, tui_state.sta_visible_rows);
+			else if (tui_state.focus == 2)
+			{
+				tui_state.msg_scroll += MAX(1, tui_state.msg_visible_rows);
+				if ((size_t) tui_state.msg_scroll
+					>= (tui_message_history_count > (size_t) tui_state.msg_visible_rows
+							? tui_message_history_count - (size_t) tui_state.msg_visible_rows
+							: 0))
+					set_message_follow_latest(1);
+				else
+					set_message_follow_latest(0);
+			}
+			else
+				tui_state.ap_scroll += MAX(1, tui_state.ap_visible_rows);
+			redraw = 1;
+		}
+		if (keycode == KEY_HOME)
+		{
+			if (tui_state.focus == 1)
+				tui_state.sta_scroll = 0;
+			else if (tui_state.focus == 2)
+			{
+				tui_state.msg_scroll = 0;
+				set_message_follow_latest(0);
+			}
+			else
+			{
+				set_selected_ap(find_visible_ap_from_head(), selection_direction_no);
+				tui_state.ap_scroll = 0;
+			}
+			redraw = 1;
+		}
+		if (keycode == KEY_END)
+		{
+			if (tui_state.focus == 1)
+				tui_state.sta_scroll = INT_MAX / 4;
+			else if (tui_state.focus == 2)
+			{
+				tui_state.msg_scroll = INT_MAX / 4;
+				set_message_follow_latest(1);
+			}
+			else
+				set_selected_ap(find_visible_ap_from_tail(), selection_direction_no);
+			redraw = 1;
+		}
+	}
+	return (redraw);
 }
 
 #define CHECK_END_OF_SCREEN()                                                  \
@@ -3582,22 +6665,21 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 	struct AP_info * ap_cur;
 	struct ST_info * st_cur;
 	struct NA_info * na_cur;
-	int columns_ap = 84;
+	int columns_ap = 83;
 	int columns_sta = 74;
 	ssize_t len;
 
 	int num_ap;
 	int num_sta;
 
-	if (!(lopt.singlechan || lopt.singlefreq))
-		columns_ap -= 4; // no RXQ in scan mode
+	if (!lopt.singlechan) columns_ap -= 4; // no RXQ in scan mode
 	if (lopt.show_uptime) columns_ap += 15; // show uptime needs more space
 
 	nlines = 2;
 
 	if (nlines >= ws_row) return;
 
-	if (lopt.do_sort_always)
+	if (ap_sort_is_live(lopt.sort_by))
 	{
 		ALLEGE(pthread_mutex_lock(&(lopt.mx_sort)) == 0);
 		dump_sort();
@@ -3642,11 +6724,19 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 
 	if (lopt.freqoption)
 	{
-		snprintf(strbuf, sizeof(strbuf) - 1, " Freq %4d", lopt.frequency[0]);
+		snprintf(strbuf,
+				 sizeof(strbuf) - 1,
+				 lopt.band_mode == BAND_MODE_AX ? " CH %2d" : " Freq %4d",
+				 lopt.band_mode == BAND_MODE_AX ? frequency_to_channel(lopt.frequency[0])
+												 : lopt.frequency[0]);
 		for (i = 1; i < if_num; i++)
 		{
 			memset(buffer, '\0', sizeof(buffer));
-			snprintf(buffer, sizeof(buffer), ",%4d", lopt.frequency[i]);
+			snprintf(buffer,
+					 sizeof(buffer),
+					 lopt.band_mode == BAND_MODE_AX ? ",%2d" : ",%4d",
+					 lopt.band_mode == BAND_MODE_AX ? frequency_to_channel(lopt.frequency[i])
+													 : lopt.frequency[i]);
 			strlcat(strbuf, buffer, sizeof(strbuf));
 		}
 	}
@@ -3753,8 +6843,7 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 		strbuf[0] = 0;
 		strlcat(strbuf, " BSSID              PWR ", sizeof(strbuf));
 
-		if (lopt.singlechan || lopt.singlefreq)
-			strlcat(strbuf, "RXQ ", sizeof(strbuf));
+		if (lopt.singlechan) strlcat(strbuf, "RXQ ", sizeof(strbuf));
 
 		strlcat(strbuf,
 				" Beacons    #Data, #/s  CH   MB   ENC CIPHER  AUTH ",
@@ -3768,21 +6857,22 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 			strlcat(strbuf, "WPS   ", sizeof(strbuf));
 			if (ws_col > (columns_ap - 4))
 			{
-				memset(strbuf + columns_ap, ' ', sizeof(strbuf) - columns_ap);
-				snprintf(strbuf + columns_ap - strlen("ESSID")
-							 + lopt.maxsize_wps_seen + strlen(" "),
-						 6,
+				const size_t n_strbuf = strlen(strbuf);
+				memset(strbuf + n_strbuf, 32, sizeof(strbuf) - n_strbuf - 1);
+				snprintf(strbuf + columns_ap + lopt.maxsize_wps_seen - 5,
+						 8,
 						 "%s",
-						 "ESSID");
+						 "  ESSID");
 				if (lopt.show_manufacturer)
 				{
 					memset(strbuf + columns_ap + lopt.maxsize_wps_seen + 1,
-						   ' ',
+						   32,
 						   sizeof(strbuf) - columns_ap - lopt.maxsize_wps_seen
 							   - 1);
 					snprintf(strbuf + columns_ap + lopt.maxsize_wps_seen
-								 + lopt.maxsize_essid_seen - strlen("ESSID"),
-							 13,
+								 + lopt.maxsize_essid_seen
+								 - 4,
+							 15,
 							 "%s",
 							 "MANUFACTURER");
 				}
@@ -3794,12 +6884,12 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 
 			if (lopt.show_manufacturer && (ws_col > (columns_ap - 4)))
 			{
-				memset(strbuf + columns_ap, ' ', sizeof(strbuf) - columns_ap);
-				snprintf(strbuf + columns_ap - strlen("ESSID")
-							 + lopt.maxsize_essid_seen,
-						 13,
+				// write spaces (32).
+				memset(strbuf + columns_ap, 32, lopt.maxsize_essid_seen - 5);
+				snprintf(strbuf + columns_ap + lopt.maxsize_essid_seen - 7,
+						 15,
 						 "%s",
-						 "MANUFACTURER");
+						 "  MANUFACTURER");
 			}
 		}
 		strbuf[ws_col - 1] = '\0';
@@ -3882,6 +6972,13 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 			nlines++;
 
 			if (nlines > (ws_row - 1)) return;
+			
+			if (isTargetMAC(ap_cur->bssid)) {
+				if (!(ap_cur->marked)) {
+					ap_cur->marked = 1;
+					ap_cur->marked_color = TEXT_RED;
+				}
+			}
 
 			memset(strbuf, '\0', sizeof(strbuf));
 
@@ -3897,7 +6994,7 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 
 			len = strlen(strbuf);
 
-			if (lopt.singlechan || lopt.singlefreq)
+			if (lopt.singlechan)
 			{
 				snprintf(strbuf + len,
 						 sizeof(strbuf) - len,
@@ -3948,20 +7045,10 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 				snprintf(strbuf + len, sizeof(strbuf) - len, "    ");
 			else
 			{
-				if (ap_cur->security & STD_WPA2)
-				{
-					if (ap_cur->security & AUTH_SAE
-						|| ap_cur->security & AUTH_OWE)
-						snprintf(strbuf + len, sizeof(strbuf) - len, "WPA3");
-					else
-						snprintf(strbuf + len, sizeof(strbuf) - len, "WPA2");
-				}
-				else if (ap_cur->security & STD_WPA)
-					snprintf(strbuf + len, sizeof(strbuf) - len, "WPA ");
-				else if (ap_cur->security & STD_WEP)
-					snprintf(strbuf + len, sizeof(strbuf) - len, "WEP ");
-				else if (ap_cur->security & STD_OPN)
-					snprintf(strbuf + len, sizeof(strbuf) - len, "OPN ");
+				snprintf(strbuf + len,
+						 sizeof(strbuf) - len,
+						 "%-6s",
+						 ap_security_std_label(ap_cur->security));
 			}
 
 			strlcat(strbuf, " ", sizeof(strbuf));
@@ -3989,10 +7076,12 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 			len = strlen(strbuf);
 
 			if ((ap_cur->security & AUTH_FIELD) == 0)
-				snprintf(strbuf + len, sizeof(strbuf) - len, "    ");
+				snprintf(strbuf + len, sizeof(strbuf) - len, "       ");
 			else
 			{
-				if (ap_cur->security & AUTH_SAE)
+				if ((ap_cur->security & AUTH_SAE) && (ap_cur->security & AUTH_PSK))
+					snprintf(strbuf + len, sizeof(strbuf) - len, "PSK+SAE");
+				else if (ap_cur->security & AUTH_SAE)
 					snprintf(strbuf + len, sizeof(strbuf) - len, "SAE ");
 				else if (ap_cur->security & AUTH_MGT)
 					snprintf(strbuf + len, sizeof(strbuf) - len, "MGT ");
@@ -4024,23 +7113,6 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 
 			if (lopt.p_selected_ap && (lopt.p_selected_ap == ap_cur))
 			{
-				if (lopt.mark_cur_ap)
-				{
-					if (ap_cur->marked == 0)
-					{
-						ap_cur->marked = 1;
-					}
-					else
-					{
-						ap_cur->marked_color++;
-						if (ap_cur->marked_color > TEXT_MAX_COLOR)
-						{
-							ap_cur->marked_color = 1;
-							ap_cur->marked = 0;
-						}
-					}
-					lopt.mark_cur_ap = 0;
-				}
 				textstyle(TEXT_REVERSE);
 				memcpy(lopt.selected_bssid, ap_cur->bssid, 6);
 			}
@@ -4050,7 +7122,7 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 				textcolor_fg(ap_cur->marked_color);
 			}
 
-			memset(strbuf + len, ' ', sizeof(strbuf) - len - 1);
+			memset(strbuf + len, 32, sizeof(strbuf) - len - 1);
 
 			if (ws_col > (columns_ap - 4))
 			{
@@ -4114,7 +7186,7 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 					else
 					{
 						// pad output
-						memset(strbuf + len, ' ', sizeof(strbuf) - len - 1);
+						memset(strbuf + len, 32, sizeof(strbuf) - len - 1);
 						len += lopt.maxsize_wps_seen - (len - wps_len);
 						strbuf[len] = '\0';
 					}
@@ -4154,13 +7226,13 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 
 				if (lopt.show_manufacturer)
 				{
-					if (lopt.maxsize_essid_seen <= (u_int) (len - essid_len))
+					if (lopt.maxsize_essid_seen <= (u_int)(len - essid_len))
 						lopt.maxsize_essid_seen
 							= (u_int) MAX(len - essid_len, 5);
 					else
 					{
 						// pad output
-						memset(strbuf + len, ' ', sizeof(strbuf) - len - 1);
+						memset(strbuf + len, 32, sizeof(strbuf) - len - 1);
 						len += lopt.maxsize_essid_seen - (len - essid_len);
 						strbuf[len] = '\0';
 					}
@@ -4179,12 +7251,12 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 
 			len = strlen(strbuf);
 
-			// write spaces until the end of column
+			// write spaces (32) until the end of column
 			int len_remaining = ws_col - len;
 			if (len_remaining > 0)
 			{
 				ALLEGE((size_t) len + len_remaining <= sizeof(strbuf));
-				memset(strbuf + len, ' ', len_remaining);
+				memset(strbuf + len, 32, len_remaining);
 			}
 
 			strbuf[ws_col - 1] = '\0';
@@ -4194,6 +7266,10 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 				|| (ap_cur->marked))
 			{
 				textstyle(TEXT_RESET);
+			}
+
+			if (lopt.target) {
+				textcolor_fg(TEXT_WHITE);
 			}
 
 			ap_cur = ap_cur->prev;
@@ -4206,11 +7282,11 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 		CHECK_END_OF_SCREEN();
 	}
 
-	if (lopt.show_sta && !(lopt.asso_station && lopt.unasso_station))
+	if (lopt.show_sta)
 	{
 		strlcpy(strbuf,
-				" BSSID              STATION "
-				"           PWR    Rate    Lost   Frames  Notes  Probes",
+				" BSSID              STATION  LA "
+				"        PWR   Rate    Lost    Frames  Notes  Probes",
 				sizeof(strbuf));
 		strbuf[ws_col - 1] = '\0';
 		console_puts(strbuf);
@@ -4226,6 +7302,8 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 
 		while (ap_cur != NULL)
 		{
+
+
 			if (ap_cur->nb_pkt < 2 || time(NULL) - ap_cur->tlast > lopt.berlin)
 			{
 				ap_cur = ap_cur->prev;
@@ -4239,7 +7317,7 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 				continue;
 			}
 
-			// Don't filter unassociated stations by ESSID
+			// Don't filter unassociated clients by ESSID
 			if (memcmp(ap_cur->bssid, BROADCAST, 6) != 0
 				&& is_filtered_essid(ap_cur->essid))
 			{
@@ -4271,10 +7349,7 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 					continue;
 				}
 
-				if (((memcmp(ap_cur->bssid, BROADCAST, 6) == 0)
-					 && lopt.asso_station)
-					|| ((memcmp(ap_cur->bssid, BROADCAST, 6) != 0)
-						&& lopt.unasso_station))
+				if (!memcmp(ap_cur->bssid, BROADCAST, 6) && lopt.asso_client)
 				{
 					st_cur = st_cur->prev;
 					continue;
@@ -4288,6 +7363,18 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 
 				if (nlines >= (ws_row - 1)) return;
 
+				if (isTargetMAC(st_cur->stmac)) {
+					if (!(st_cur->marked)) {
+						st_cur->marked = 1;
+						st_cur->marked_color = TEXT_RED;
+					}
+				}
+
+				if (st_cur->marked)
+				{
+					textcolor_fg(st_cur->marked_color);
+				}
+
 				if (!memcmp(ap_cur->bssid, BROADCAST, 6))
 					printf(" (not associated) ");
 				else
@@ -4299,6 +7386,7 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 						   ap_cur->bssid[4],
 						   ap_cur->bssid[5]);
 
+				printf("  %2s", (st_cur->stmac[0] & 0x02) ? "LA" : "");
 				printf("  %02X:%02X:%02X:%02X:%02X:%02X",
 					   st_cur->stmac[0],
 					   st_cur->stmac[1],
@@ -4350,7 +7438,12 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 				erase_line(0);
 				putchar('\n');
 
+				if (lopt.target) {
+					textcolor_fg(TEXT_WHITE);
+				}
+
 				st_cur = st_cur->prev;
+				
 			}
 
 			if ((lopt.p_selected_ap
@@ -4358,6 +7451,10 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 				|| (ap_cur->marked))
 			{
 				textstyle(TEXT_RESET);
+			}
+
+			if (lopt.target) {
+				textcolor_fg(TEXT_WHITE);
 			}
 
 			ap_cur = ap_cur->prev;
@@ -4708,7 +7805,7 @@ static THREAD_ENTRY(gps_tracker_thread)
 	*return_success = 0;
 	*return_error = -1;
 
-	// In case we GPSd goes down or we lose connection or a fix, we keep trying to connect inside the while loop
+	// Incase we GPSd goes down or we lose connection or a fix, we keep trying to connect inside the while loop
 	while (lopt.do_exit == 0)
 	{
 		// If our socket connection to GPSD has been attempted and failed wait before trying again - used to prevent locking the CPU on socket retries
@@ -5010,38 +8107,43 @@ static THREAD_ENTRY(gps_tracker_thread)
 static void sighandler(int signum)
 {
 	int card = 0;
+	int value = 0;
 
 	if (signum == SIGUSR1)
 	{
-		ssize_t unused = read(lopt.cd_pipe[0], &card, sizeof(int));
-		if (unused < 0)
+		while (1)
 		{
-			// error occurred
-			perror("read");
-			return;
-		}
-		else if (unused == 0)
-		{
-			// EOF
-			perror("EOF encountered read(opt.cd_pipe[0])");
-			return;
-		}
+			ssize_t unused = read(lopt.cd_pipe[0], &card, sizeof(int));
+			if (unused < 0)
+			{
+				if (errno == EAGAIN || errno == EWOULDBLOCK)
+					return;
+				// error occurred
+				perror("read");
+				return;
+			}
+			else if (unused == 0)
+			{
+				// EOF
+				perror("EOF encountered read(opt.cd_pipe[0])");
+				return;
+			}
+			else if (unused != (ssize_t) sizeof(int))
+				return;
 
-		if (card < 0 || (size_t) card >= ArrayCount(lopt.frequency))
-		{
-			// invalid received data
-			fprintf(stderr,
-					"Invalid data received for read(opt.cd_pipe[0]), got %d\n",
-					card);
-			return;
-		}
+			unused = read(lopt.ch_pipe[0], &value, sizeof(int));
+			if (unused < 0)
+			{
+				if (errno == EAGAIN || errno == EWOULDBLOCK)
+					return;
+				perror("read");
+				return;
+			}
+			else if (unused != (ssize_t) sizeof(int))
+				return;
 
-		if (lopt.freqoption)
-			IGNORE_LTZ(
-				read(lopt.ch_pipe[0], &(lopt.frequency[card]), sizeof(int)));
-		else
-			IGNORE_LTZ(
-				read(lopt.ch_pipe[0], &(lopt.channel[card]), sizeof(int)));
+			process_hopper_event(card, value);
+		}
 	}
 
 	if (signum == SIGUSR2)
@@ -5049,9 +8151,9 @@ static void sighandler(int signum)
 
 	if (signum == SIGINT || signum == SIGTERM)
 	{
+		if (getpid() != main_pid)
+			_exit(0);
 		lopt.do_exit = 1;
-		show_cursor();
-		reset_term();
 		fprintf(stdout, "Quitting...\n");
 	}
 
@@ -5060,7 +8162,6 @@ static void sighandler(int signum)
 		fprintf(stderr,
 				"Caught signal 11 (SIGSEGV). Please"
 				" contact the author!\n\n");
-		show_cursor();
 		fflush(stdout);
 		exit(1);
 	}
@@ -5070,7 +8171,6 @@ static void sighandler(int signum)
 		fprintf(stdout,
 				"Caught signal 14 (SIGALRM). Please"
 				" contact the author!\n\n");
-		show_cursor();
 		_exit(1);
 	}
 
@@ -5078,8 +8178,7 @@ static void sighandler(int signum)
 
 	if (signum == SIGWINCH)
 	{
-		erase_display(0);
-		fflush(stdout);
+		tui_resize_pending = 1;
 	}
 }
 
@@ -5173,6 +8272,32 @@ static int getfreqcount(int valid)
 	return (i);
 }
 
+static void report_hopper_update(pid_t parent, int card, int value)
+{
+	IGNORE_LTZ(write(lopt.cd_pipe[1], &card, sizeof(int)));
+	IGNORE_LTZ(write(lopt.ch_pipe[1], &value, sizeof(int)));
+	kill(parent, SIGUSR1);
+	usleep(1000);
+}
+
+static void set_hopper_pipe_nonblocking(void)
+{
+	int flags;
+
+	flags = fcntl(lopt.cd_pipe[0], F_GETFL, 0);
+	if (flags >= 0)
+		IGNORE_LTZ(fcntl(lopt.cd_pipe[0], F_SETFL, flags | O_NONBLOCK));
+
+	flags = fcntl(lopt.ch_pipe[0], F_GETFL, 0);
+	if (flags >= 0)
+		IGNORE_LTZ(fcntl(lopt.ch_pipe[0], F_SETFL, flags | O_NONBLOCK));
+}
+
+static void report_hopper_scan_wrap(pid_t parent)
+{
+	report_hopper_update(parent, -1, 0);
+}
+
 static void
 channel_hopper(struct wif * wi[], int if_num, int chan_count, pid_t parent)
 {
@@ -5187,6 +8312,8 @@ channel_hopper(struct wif * wi[], int if_num, int chan_count, pid_t parent)
 			again = 1;
 
 			ch_idx = chi % chan_count;
+			if (!first && ch_idx == 0)
+				report_hopper_scan_wrap(parent);
 
 			card = cai % if_num;
 
@@ -5225,10 +8352,7 @@ channel_hopper(struct wif * wi[], int if_num, int chan_count, pid_t parent)
 				{
 					ch = wi_get_channel(wi[card]);
 					lopt.channel[card] = ch;
-					IGNORE_LTZ(write(lopt.cd_pipe[1], &card, sizeof(int)));
-					IGNORE_LTZ(write(lopt.ch_pipe[1], &ch, sizeof(int)));
-					kill(parent, SIGUSR1);
-					usleep(1000);
+					report_hopper_update(parent, card, ch);
 				}
 				continue;
 			}
@@ -5237,21 +8361,43 @@ channel_hopper(struct wif * wi[], int if_num, int chan_count, pid_t parent)
 
 			ch = lopt.channels[ch_idx];
 
+			if (
 #ifdef CONFIG_LIBNL
-			if (wi_set_ht_channel(wi[card], ch, lopt.htval) == 0)
+				wi_set_ht_channel(wi[card], ch, lopt.htval)
 #else
-			if (wi_set_channel(wi[card], ch) == 0)
+				wi_set_channel(wi[card], ch)
 #endif
+				== 0)
 			{
-				lopt.channel[card] = ch;
-				IGNORE_LTZ(write(lopt.cd_pipe[1], &card, sizeof(int)));
-				IGNORE_LTZ(write(lopt.ch_pipe[1], &ch, sizeof(int)));
-				if (lopt.active_scan_sim > 0) send_probe_request(wi[card]);
-				kill(parent, SIGUSR1);
-				usleep(1000);
+				int effective = wi_get_channel(wi[card]);
+
+				if (effective != ch)
+				{
+					usleep(10000);
+					effective = wi_get_channel(wi[card]);
+				}
+
+				if (effective == ch)
+				{
+					lopt.channel[card] = ch;
+					lopt.frequency[card] = channel_to_frequency_for_band_mode(
+						lopt.band_mode,
+						ch);
+					if (lopt.active_scan_sim > 0) send_probe_request(wi[card]);
+					report_hopper_update(parent, card, ch);
+				}
+				else
+				{
+					report_hopper_update(parent, card, -ch);
+					lopt.channels[ch_idx] = -1; /* remove invalid channel */
+					j--;
+					cai--;
+					continue;
+				}
 			}
 			else
 			{
+				report_hopper_update(parent, card, -ch);
 				lopt.channels[ch_idx] = -1; /* remove invalid channel */
 				j--;
 				cai--;
@@ -5269,7 +8415,7 @@ channel_hopper(struct wif * wi[], int if_num, int chan_count, pid_t parent)
 			first = 0;
 		}
 
-		usleep((useconds_t) (lopt.hopfreq * 1000));
+		usleep((useconds_t)(lopt.hopfreq * 1000));
 	}
 
 	exit(0);
@@ -5289,6 +8435,8 @@ frequency_hopper(struct wif * wi[], int if_num, int chan_count, pid_t parent)
 			again = 1;
 
 			ch_idx = chi % chan_count;
+			if (!first && ch_idx == 0)
+				report_hopper_scan_wrap(parent);
 
 			card = cai % if_num;
 
@@ -5328,10 +8476,7 @@ frequency_hopper(struct wif * wi[], int if_num, int chan_count, pid_t parent)
 				{
 					ch = wi_get_freq(wi[card]);
 					lopt.frequency[card] = ch;
-					IGNORE_LTZ(write(lopt.cd_pipe[1], &card, sizeof(int)));
-					IGNORE_LTZ(write(lopt.ch_pipe[1], &ch, sizeof(int)));
-					kill(parent, SIGUSR1);
-					usleep(1000);
+					report_hopper_update(parent, card, ch);
 				}
 				continue;
 			}
@@ -5340,17 +8485,38 @@ frequency_hopper(struct wif * wi[], int if_num, int chan_count, pid_t parent)
 
 			ch = lopt.own_frequencies[ch_idx];
 
-			if (wi_set_freq(wi[card], ch) == 0)
+			if ((lopt.band_mode == BAND_MODE_AX
+				 ? wi_set_freq_ax(wi[card], ch, lopt.ax_bw, lopt.c_seg0, lopt.c_seg1)
+				 : wi_set_freq(wi[card], ch)) == 0)
 			{
-				lopt.frequency[card] = ch;
-				IGNORE_LTZ(write(lopt.cd_pipe[1], &card, sizeof(int)));
-				IGNORE_LTZ(write(lopt.ch_pipe[1], &ch, sizeof(int)));
-				kill(parent, SIGUSR1);
-				usleep(1000);
+				int effective = wi_get_freq(wi[card]);
+
+				if (effective != ch)
+				{
+					usleep(10000);
+					effective = wi_get_freq(wi[card]);
+				}
+				if (lopt.band_mode == BAND_MODE_AX && effective <= 0)
+					effective = ch;
+
+				if (effective == ch)
+				{
+					lopt.frequency[card] = ch;
+					report_hopper_update(parent, card, ch);
+				}
+				else
+				{
+					report_hopper_update(parent, card, -ch);
+					lopt.own_frequencies[ch_idx] = -1; /* remove invalid frequency */
+					j--;
+					cai--;
+					continue;
+				}
 			}
 			else
 			{
-				lopt.own_frequencies[ch_idx] = -1; /* remove invalid channel */
+				report_hopper_update(parent, card, -ch);
+				lopt.own_frequencies[ch_idx] = -1; /* remove invalid frequency */
 				j--;
 				cai--;
 				continue;
@@ -5367,20 +8533,1007 @@ frequency_hopper(struct wif * wi[], int if_num, int chan_count, pid_t parent)
 			first = 0;
 		}
 
-		usleep((useconds_t) (lopt.hopfreq * 1000));
+		usleep((useconds_t)(lopt.hopfreq * 1000));
 	}
 
 	exit(0);
 }
 
-static inline int invalid_channel(int chan)
+// takes in an array of channels, checks against the band a freq set, creates string of freqs 
+static void channels_to_freq_string_a(const int *channels, char *freq_string) {
+
+    int len = strlen(freq_string);
+	int available = MAX_FREQS * MAX_FREQ_STR_LEN - len - 1; // Available space, -1 for null terminator
+    for (int i = 0; channels[i] != 0 && available > 0; ++i) {
+        for (int j = 0; channel_frequency_map_a[j] != -1; j += 2) {
+            if (channels[i] == channel_frequency_map_a[j]) {
+                // Calculate space needed for this frequency (including comma if not the first entry)
+                int needed_space = snprintf(NULL, 0, "%s%d", len > 0 ? "," : "", channel_frequency_map_a[j + 1]);
+
+                if (needed_space <= available) {
+                    // Append frequency to string if enough space is available
+                    int written = snprintf(freq_string + len, needed_space + 1, "%s%d",
+                                           len > 0 ? "," : "", channel_frequency_map_a[j + 1]);
+                    len += written;
+                    available -= written;
+                } else {
+                    // Not enough space to append the next frequency
+                    return;
+                }
+                break; // Found and processed the channel, move to the next
+            }
+        }
+    }
+}
+
+//takes in an array of channels, checks against the band bg freq set, creates string of freqs
+static void channels_to_freq_string_bg(const int *channels, char *freq_string) {
+
+    int len = strlen(freq_string);
+	int available = MAX_FREQS * MAX_FREQ_STR_LEN - len - 1; // Available space, -1 for null terminator
+    for (int i = 0; channels[i] != 0; ++i) {
+        for (int j = 0; channel_frequency_map_bg[j] != -1; j += 2) {
+            if (channels[i] == channel_frequency_map_bg[j]) {
+                // Calculate space needed for this frequency (including comma if not the first entry)
+                int needed_space = snprintf(NULL, 0, "%s%d", len > 0 ? "," : "", channel_frequency_map_bg[j + 1]);
+
+                if (needed_space <= available) {
+                    // Append frequency to string if enough space is available
+                    int written = snprintf(freq_string + len, needed_space + 1, "%s%d",
+                                           len > 0 ? "," : "", channel_frequency_map_bg[j + 1]);
+                    len += written;
+                    available -= written;
+                } else {
+                    // Not enough space to append the next frequency
+                    return;
+                }
+                break; // Found and processed the channel, move to the next
+            }
+        }
+    }
+}
+
+// Function to map 6 GHz channel number to frequency (in MHz)
+static int channel_to_frequency_ax(int channel) {
+	// Fixed first and last channel numbers
+    int first_channel = channel_frequency_map_ax[0];
+	// -4 to get the last channel number before the end marker
+    int last_channel = channel_frequency_map_ax[sizeof(channel_frequency_map_ax) / sizeof(channel_frequency_map_ax[0]) - 4];
+
+    // Check if the channel number is within the valid range
+    if (channel < first_channel || channel > last_channel) {
+        return -1;
+    }
+
+    // Iterate over the lookup table to find the frequency
+    for (int i = 0; channel_frequency_map_ax[i] != -1; i += 2) {
+        if (channel_frequency_map_ax[i] == channel) {
+            return channel_frequency_map_ax[i + 1];
+        }
+    }
+    return -1; // Channel not found, return invalid
+}
+
+static int channel_to_frequency(int channel)
+{
+	int i;
+
+	for (i = 0; channel_frequency_map_bg[i] != -1; i += 2)
+	{
+		if (channel_frequency_map_bg[i] == channel)
+			return (channel_frequency_map_bg[i + 1]);
+	}
+
+	for (i = 0; channel_frequency_map_a[i] != -1; i += 2)
+	{
+		if (channel_frequency_map_a[i] == channel)
+			return (channel_frequency_map_a[i + 1]);
+	}
+
+	return (channel_to_frequency_ax(channel));
+}
+
+static int channel_to_frequency_for_band_mode(int band_mode, int channel)
+{
+	int i;
+
+	switch (band_mode)
+	{
+		case BAND_MODE_BG:
+			for (i = 0; channel_frequency_map_bg[i] != -1; i += 2)
+				if (channel_frequency_map_bg[i] == channel)
+					return (channel_frequency_map_bg[i + 1]);
+			break;
+		case BAND_MODE_A:
+			for (i = 0; channel_frequency_map_a[i] != -1; i += 2)
+				if (channel_frequency_map_a[i] == channel)
+					return (channel_frequency_map_a[i + 1]);
+			break;
+		case BAND_MODE_AX:
+			return (channel_to_frequency_ax(channel));
+		default:
+			break;
+	}
+
+	return (channel_to_frequency(channel));
+}
+
+static int frequency_to_channel(int frequency)
+{
+	int channel = getChannelFromFrequency(frequency);
+
+	if (channel > 0)
+		return (channel);
+
+	return (frequency);
+}
+
+static int band_from_frequency_or_channel(int frequency, int channel)
+{
+	if (frequency >= 2400 && frequency < 2500)
+		return (24);
+	if (frequency >= 4900 && frequency < 5925)
+		return (5);
+	if (frequency >= 5925 && frequency <= 7125)
+		return (6);
+
+	if (lopt.band_mode == BAND_MODE_AX)
+		return (6);
+	if (lopt.band_mode == BAND_MODE_A)
+		return (5);
+	if (lopt.band_mode == BAND_MODE_BG)
+		return (24);
+
+	if (channel > 14)
+		return (5);
+	if (channel > 0)
+		return (24);
+	return (0);
+}
+
+static int band_from_rx_info(const struct rx_info * ri, int channel)
+{
+	if (ri == NULL)
+		return (band_from_frequency_or_channel(0, channel));
+	return (band_from_frequency_or_channel((int) ri->ri_freq, channel));
+}
+
+static int channel_is_valid_for_band(int channel)
+{
+	size_t i;
+
+	if (channel <= 0) return (0);
+
+	switch (lopt.band_mode)
+	{
+		case BAND_MODE_BG:
+			for (i = 0; bg_chans[i] != 0; i++)
+				if (bg_chans[i] == channel) return (1);
+			return (0);
+		case BAND_MODE_A:
+			for (i = 0; a_chans[i] != 0; i++)
+				if (a_chans[i] == channel) return (1);
+			return (0);
+		case BAND_MODE_AX:
+			for (i = 0; ax_chans[i] != 0; i++)
+				if (ax_chans[i] == channel) return (1);
+			return (0);
+		default:
+			return (channel_to_frequency(channel) > 0);
+	}
+}
+
+static int park_on_channel(int channel)
+{
+	struct wif * wi[MAX_CARDS];
+	int i;
+	int freq;
+	int hopper_was_running;
+
+	if (g_wi == NULL || g_wi[0] == NULL)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ no wireless interface available");
+		append_tui_message_history_now(lopt.message);
+		return (0);
+	}
+
+	if (!channel_is_valid_for_band(channel))
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ channel %d is not valid for %s",
+				 channel,
+				 band_mode_label(lopt.band_mode));
+		append_tui_message_history_now(lopt.message);
+		return (0);
+	}
+
+	for (i = 0; i < MAX_CARDS; i++)
+		wi[i] = NULL;
+	for (i = 0; i < lopt.num_cards; i++)
+		wi[i] = g_wi[i];
+
+	hopper_was_running = (hopper_pid > 0);
+	stop_hopper();
+
+	if (lopt.freqoption)
+	{
+		freq = channel_to_frequency_for_band_mode(lopt.band_mode, channel);
+		if (freq <= 0)
+		{
+			snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ unable to map channel %d to a frequency",
+					 channel);
+			append_tui_message_history_now(lopt.message);
+			if (hopper_was_running) resume_hopper();
+			return (0);
+		}
+
+		for (i = 0; i < lopt.num_cards; i++)
+		{
+#ifdef CONFIG_LIBNL
+			if (wi_set_freq_ax(wi[i], freq, lopt.ax_bw, lopt.c_seg0, lopt.c_seg1)
+				!= 0)
+			{
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ failed to tune to channel %d",
+						 channel);
+				append_tui_message_history_now(lopt.message);
+				if (hopper_was_running) resume_hopper();
+				return (0);
+			}
+#else
+			if (wi_set_freq(wi[i], freq) != 0)
+			{
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ failed to tune to channel %d",
+						 channel);
+				append_tui_message_history_now(lopt.message);
+				if (hopper_was_running) resume_hopper();
+				return (0);
+			}
+#endif
+			lopt.frequency[i] = freq;
+		}
+		lopt.singlefreq = 1;
+		lopt.singlechan = 0;
+	}
+	else
+	{
+		for (i = 0; i < lopt.num_cards; i++)
+		{
+			int channel_freq = channel_to_frequency_for_band_mode(lopt.band_mode,
+																channel);
+
+#ifdef CONFIG_LIBNL
+			if (wi_set_ht_channel(wi[i], channel, lopt.htval) != 0)
+			{
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ failed to tune to channel %d",
+						 channel);
+				append_tui_message_history_now(lopt.message);
+				if (hopper_was_running) resume_hopper();
+				return (0);
+			}
+#else
+			if (wi_set_channel(wi[i], channel) != 0)
+			{
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ failed to tune to channel %d",
+						 channel);
+				append_tui_message_history_now(lopt.message);
+				if (hopper_was_running) resume_hopper();
+				return (0);
+			}
+#endif
+			lopt.channel[i] = channel;
+			lopt.frequency[i] = channel_freq;
+		}
+		lopt.singlechan = 1;
+		lopt.singlefreq = 0;
+	}
+
+	return (1);
+}
+
+static void begin_channel_entry(void)
+{
+	channel_entry_mode = INPUT_ENTRY_CHANNEL;
+	channel_entry_active = 1;
+	channel_entry_len = 0;
+	channel_entry_buf[0] = '\0';
+	set_channel_entry_prompt();
+	if (use_ncurses_tui)
+		render_output_view(0);
+}
+
+static void begin_regdom_entry(void)
+{
+	channel_entry_mode = INPUT_ENTRY_REGDOM;
+	channel_entry_active = 1;
+	channel_entry_len = 0;
+	channel_entry_buf[0] = '\0';
+	set_channel_entry_prompt();
+	if (use_ncurses_tui)
+		render_output_view(0);
+}
+
+static void cancel_channel_entry(const char * message)
+{
+	channel_entry_active = 0;
+	channel_entry_mode = INPUT_ENTRY_NONE;
+	channel_entry_len = 0;
+	channel_entry_buf[0] = '\0';
+	channel_entry_prompt[0] = '\0';
+	if (message != NULL)
+		snprintf(lopt.message, sizeof(lopt.message), "%s", message);
+}
+
+static int apply_channel_entry(void)
+{
+	int channel;
+	int frequency;
+
+	channel = atoi(channel_entry_buf);
+	channel_entry_active = 0;
+	channel_entry_mode = INPUT_ENTRY_NONE;
+	channel_entry_len = 0;
+	channel_entry_buf[0] = '\0';
+	channel_entry_prompt[0] = '\0';
+
+	if (channel <= 0)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ invalid channel entry");
+		append_tui_message_history_now(lopt.message);
+		return (0);
+	}
+
+	if (!park_on_channel(channel))
+		return (0);
+
+	frequency = channel_to_frequency_for_band_mode(lopt.band_mode, channel);
+	snprintf(lopt.message,
+			 sizeof(lopt.message),
+			 "][ channel %d selected (%d MHz)",
+			 channel,
+			 frequency);
+	append_tui_message_history_now(lopt.message);
+	return (1);
+}
+
+static int apply_regdom_entry(void)
+{
+	char country[3];
+
+	if (channel_entry_len != 2)
+	{
+		channel_entry_active = 0;
+		channel_entry_mode = INPUT_ENTRY_NONE;
+		channel_entry_len = 0;
+		channel_entry_buf[0] = '\0';
+		channel_entry_prompt[0] = '\0';
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ invalid regdom entry");
+		append_tui_message_history_now(lopt.message);
+		return (0);
+	}
+
+	country[0] = (char) toupper((unsigned char) channel_entry_buf[0]);
+	country[1] = (char) toupper((unsigned char) channel_entry_buf[1]);
+	country[2] = '\0';
+
+	channel_entry_active = 0;
+	channel_entry_mode = INPUT_ENTRY_NONE;
+	channel_entry_len = 0;
+	channel_entry_buf[0] = '\0';
+	channel_entry_prompt[0] = '\0';
+
+	if (!set_kernel_regdom(country))
+	{
+		return (0);
+	}
+
+	snprintf(lopt.message,
+			 sizeof(lopt.message),
+			 "][ regdom requested: %s",
+			 country);
+	append_tui_message_history_now(lopt.message);
+	return (1);
+}
+
+static int lock_selected_ap_channel(void)
+{
+	struct AP_info * ap_cur;
+	int ap_band_mode_value;
+
+	ap_cur = lopt.p_selected_ap;
+	if (ap_cur == NULL || ap_cur->channel <= 0)
+		return (0);
+
+	ap_band_mode_value = ap_band_mode(ap_cur);
+	if (!ensure_band_mode(ap_band_mode_value))
+		return (0);
+
+	if (!park_on_channel(ap_cur->channel))
+		return (0);
+
+	{
+		int frequency = channel_to_frequency_for_band_mode(ap_band_mode_value,
+															ap_cur->channel);
+
+		if (frequency > 0)
+		{
+			snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ Locked to channel %d (%d MHz)",
+					 ap_cur->channel,
+					 frequency);
+		}
+		else
+		{
+			snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ Locked to channel %d",
+					 ap_cur->channel);
+		}
+	}
+	append_tui_message_history_now(lopt.message);
+	return (1);
+}
+
+static int write_wpa_snapshot(void)
+{
+	char filename[128];
+	struct tm * lt;
+	time_t now;
+	size_t records = 0;
+
+	now = time(NULL);
+	lt = localtime(&now);
+	if (lt == NULL)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ failed to build handshake snapshot name");
+		append_tui_message_history_now(lopt.message);
+		return (0);
+	}
+
+	snprintf(filename,
+			 sizeof(filename),
+			 "handshakes-%02d%02d-%02d%02d%02d.ivs",
+			 lt->tm_mon + 1,
+			 lt->tm_mday,
+			 lt->tm_hour,
+			 lt->tm_min,
+			 lt->tm_sec);
+
+	if (dump_write_wpa_snapshot(filename, lopt.st_1st, &records) != 0)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ failed to write WPA snapshot");
+		append_tui_message_history_now(lopt.message);
+		return (0);
+	}
+
+	if (records == 0)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ no WPA handshakes buffered");
+		append_tui_message_history_now(lopt.message);
+		return (0);
+	}
+
+	snprintf(lopt.message,
+			 sizeof(lopt.message),
+			 "][ wrote %zu WPA record%s to %s",
+			 records,
+			 records == 1 ? "" : "s",
+			 filename);
+	append_tui_message_history_now(lopt.message);
+	return (1);
+}
+
+static void stop_hopper(void)
+{
+	int status;
+
+	if (hopper_pid <= 0) return;
+
+	kill(hopper_pid, SIGTERM);
+	while (waitpid(hopper_pid, &status, 0) < 0)
+	{
+		if (errno != EINTR)
+			break;
+	}
+	hopper_pid = -1;
+}
+
+static int resume_hopper(void)
+{
+	struct wif * wi[MAX_CARDS];
+	char ifnam[64];
+	int chan_count = 0;
+	int freq_count = 0;
+	int i;
+	pid_t child_pid;
+
+	if (g_wi == NULL || g_wi[0] == NULL)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ no wireless interface available");
+		return (0);
+	}
+
+	if (hopper_pid > 0)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ channel hopping already running");
+		append_tui_message_history(lopt.message, time(NULL));
+		return (1);
+	}
+
+	for (i = 0; i < MAX_CARDS; i++)
+		wi[i] = NULL;
+	for (i = 0; i < lopt.num_cards; i++)
+		wi[i] = g_wi[i];
+
+	if (lopt.freqoption)
+	{
+		freq_count = getfreqcount(0);
+		if (freq_count <= 0)
+		{
+			snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ no frequencies available for hopping");
+			append_tui_message_history(lopt.message, time(NULL));
+			return (0);
+		}
+	}
+	else
+	{
+		chan_count = getchancount(0);
+		if (chan_count <= 0)
+		{
+			snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ no channels available for hopping");
+			append_tui_message_history(lopt.message, time(NULL));
+			return (0);
+		}
+	}
+
+	if (!hopper_pipe_ready)
+	{
+		struct sigaction action;
+
+		IGNORE_NZ(pipe(lopt.ch_pipe));
+		IGNORE_NZ(pipe(lopt.cd_pipe));
+		set_hopper_pipe_nonblocking();
+
+		action.sa_flags = 0;
+		action.sa_handler = &sighandler;
+		sigemptyset(&action.sa_mask);
+
+		if (sigaction(SIGUSR1, &action, NULL) == -1)
+			perror("sigaction(SIGUSR1)");
+		hopper_pipe_ready = 1;
+	}
+
+	reset_hopper_reject_state();
+	hopper_reject_total = lopt.freqoption ? freq_count : chan_count;
+	child_pid = fork();
+	if (child_pid == 0)
+	{
+		/* reopen cards.  This way parent & child don't share
+		 * resources for accessing the card (e.g. file descriptors)
+		 * which may cause problems.  -sorbo
+		 */
+		for (i = 0; i < lopt.num_cards; i++)
+		{
+			strlcpy(ifnam, wi_get_ifname(wi[i]), sizeof(ifnam));
+
+			wi_close(wi[i]);
+			wi[i] = wi_open(ifnam);
+			if (!wi[i])
+			{
+				printf("Can't reopen %s\n", ifnam);
+				exit(EXIT_FAILURE);
+			}
+		}
+
+		/* Drop privileges */
+		if (setuid(getuid()) == -1)
+		{
+			perror("setuid");
+		}
+
+		if (lopt.freqoption)
+			frequency_hopper(wi, lopt.num_cards, freq_count, main_pid);
+		else
+			channel_hopper(wi, lopt.num_cards, chan_count, main_pid);
+		exit(EXIT_FAILURE);
+	}
+	else if (child_pid < 0)
+	{
+		perror("fork");
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ failed to resume channel hopping");
+		append_tui_message_history(lopt.message, time(NULL));
+		return (0);
+	}
+
+	hopper_pid = child_pid;
+	lopt.singlechan = 0;
+	lopt.singlefreq = 0;
+	snprintf(lopt.message, sizeof(lopt.message), "][ channel hopping resumed");
+	append_tui_message_history(lopt.message, time(NULL));
+	return (1);
+}
+
+static const char * band_mode_label(int band_mode)
+{
+	switch (band_mode)
+	{
+		case BAND_MODE_BG:
+			return ("2.4 GHz");
+		case BAND_MODE_A:
+			return ("5 GHz");
+		case BAND_MODE_AX:
+			return ("6 GHz");
+		default:
+			return ("2.4 GHz");
+	}
+}
+
+static int infer_band_mode(void)
+{
+	if (lopt.scan_11ax)
+		return (BAND_MODE_AX);
+
+	if (lopt.channels == (int *) a_chans)
+		return (BAND_MODE_A);
+
+	if (lopt.channels == (int *) bg_chans)
+		return (BAND_MODE_BG);
+
+	if (lopt.channel[0] > 14)
+		return (BAND_MODE_A);
+
+	return (BAND_MODE_BG);
+}
+
+static int band_support_mask_for_interface(const char * ifname)
+{
+	FILE * fp;
+	char line[256];
+	char phy_name[32];
+	char cmd[128];
+	int mask = 0;
+
+	if (ifname == NULL || *ifname == '\0') return (-1);
+
+	snprintf(cmd, sizeof(cmd), "iw dev %s info 2>/dev/null", ifname);
+	fp = popen(cmd, "r");
+	if (fp == NULL) return (-1);
+
+	phy_name[0] = '\0';
+	while (fgets(line, sizeof(line), fp) != NULL)
+	{
+		char * p = line;
+		int phy_index;
+
+		while (isspace((unsigned char) *p))
+			p++;
+		if (sscanf(p, "wiphy %d", &phy_index) == 1)
+		{
+			snprintf(phy_name, sizeof(phy_name), "phy%d", phy_index);
+			break;
+		}
+	}
+	pclose(fp);
+
+	if (phy_name[0] == '\0') return (-1);
+
+	snprintf(cmd, sizeof(cmd), "iw phy %s info 2>/dev/null", phy_name);
+	fp = popen(cmd, "r");
+	if (fp == NULL) return (-1);
+
+	while (fgets(line, sizeof(line), fp) != NULL)
+	{
+		char * p = line;
+		int freq;
+
+		while (isspace((unsigned char) *p))
+			p++;
+		if (*p != '*') continue;
+		p++;
+		while (isspace((unsigned char) *p))
+			p++;
+		if (sscanf(p, "%d", &freq) != 1) continue;
+
+		if (freq >= 2400 && freq < 2500)
+			mask |= (1 << BAND_MODE_BG);
+		else if (freq >= 4900 && freq < 5925)
+			mask |= (1 << BAND_MODE_A);
+		else if (freq >= 5925 && freq <= 7125)
+			mask |= (1 << BAND_MODE_AX);
+	}
+
+	pclose(fp);
+	return (mask);
+}
+
+static int band_support_mask_for_cards(struct wif * wi[], int num_cards)
+{
+	int mask = 0;
+	int have_mask = 0;
+	int i;
+
+	if (wi == NULL || num_cards <= 0) return (-1);
+
+	for (i = 0; i < num_cards; i++)
+	{
+		const char * ifname;
+		int card_mask;
+
+		if (wi[i] == NULL) continue;
+		ifname = wi_get_ifname(wi[i]);
+		card_mask = band_support_mask_for_interface(ifname);
+		if (card_mask < 0)
+			continue;
+		if (!have_mask)
+		{
+			mask = card_mask;
+			have_mask = 1;
+		}
+		else
+		{
+			mask &= card_mask;
+		}
+	}
+
+	return (have_mask ? mask : -1);
+}
+
+static int band_mode_is_supported(int band_mode)
+{
+	int mask = supported_band_mode_mask();
+
+	if (band_mode < BAND_MODE_BG || band_mode > BAND_MODE_AX)
+		return (0);
+	return ((mask & (1 << band_mode)) != 0);
+}
+
+static int supported_band_mode_mask(void)
+{
+	if (lopt.band_support_mask < 0)
+		return ((1 << BAND_MODE_BG) | (1 << BAND_MODE_A) | (1 << BAND_MODE_AX));
+	return (lopt.band_support_mask);
+}
+
+static int next_supported_band_mode(int current_band_mode, int direction)
+{
+	const int bands[] = {BAND_MODE_BG, BAND_MODE_A, BAND_MODE_AX};
+	int mask = supported_band_mode_mask();
+	int idx = 0;
+	int step = 1;
+	int i;
+
+	if (direction < 0)
+		step = -1;
+	for (i = 0; i < (int) ArrayCount(bands); i++)
+	{
+		if (bands[i] == current_band_mode)
+		{
+			idx = i;
+			break;
+		}
+	}
+
+	for (i = 1; i <= (int) ArrayCount(bands); i++)
+	{
+		int candidate = bands[(idx + (step * i) + (int) ArrayCount(bands)) % (int) ArrayCount(bands)];
+
+		if (mask & (1 << candidate))
+			return (candidate);
+	}
+
+	return (current_band_mode);
+}
+
+static int build_ax_frequency_list(int ** freqs_out)
+{
+	size_t count = 0;
+	size_t i;
+	int * freqs;
+	int allowed_freqs[AIRODUMP_TUI_MAX_CHANNEL_STATUS];
+	int use_allowed_freqs = 0;
+
+	REQUIRE(freqs_out != NULL);
+
+	count = get_allowed_ax_frequencies(allowed_freqs, ArrayCount(allowed_freqs));
+	if (count == 0)
+		while (ax_chans[count] != 0)
+			count++;
+	else
+		use_allowed_freqs = 1;
+	freqs = (int *) malloc(sizeof(int) * (count + 1));
+	if (freqs == NULL) return (0);
+
+	if (use_allowed_freqs)
+	{
+		for (i = 0; i < count; i++)
+			freqs[i] = allowed_freqs[i];
+	}
+	else
+	{
+		for (i = 0; i < count; i++)
+			freqs[i] = channel_to_frequency_ax(ax_chans[i]);
+	}
+	freqs[count] = 0;
+	*freqs_out = freqs;
+	return (1);
+}
+
+static int switch_band(int direction)
+{
+	int old_band_mode = lopt.band_mode;
+	int * old_own_frequencies = lopt.own_frequencies;
+	int next_band_mode;
+	int * new_freqs = NULL;
+	int supported_mask;
+	int success;
+
+	if (direction == 0) direction = 1;
+	supported_mask = supported_band_mode_mask();
+	if (supported_mask == 0)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ no supported bands available");
+		append_tui_message_history(lopt.message, time(NULL));
+		return (0);
+	}
+	next_band_mode = next_supported_band_mode(lopt.band_mode, direction);
+	if (next_band_mode == lopt.band_mode
+		&& !band_mode_is_supported(lopt.band_mode))
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ no supported bands available");
+		append_tui_message_history(lopt.message, time(NULL));
+		return (0);
+	}
+	if (next_band_mode == lopt.band_mode)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ %s is the only supported band",
+				 band_mode_label(lopt.band_mode));
+		append_tui_message_history(lopt.message, time(NULL));
+		return (0);
+	}
+
+	if (next_band_mode == BAND_MODE_AX)
+	{
+		if (!build_ax_frequency_list(&new_freqs))
+		{
+			snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ unable to build 6 GHz band list");
+			append_tui_message_history(lopt.message, time(NULL));
+			return (0);
+		}
+	}
+
+	stop_hopper();
+
+	if (next_band_mode == BAND_MODE_AX)
+	{
+		lopt.channels = (int *) ax_chans;
+		lopt.freqoption = 1;
+		lopt.chanoption = 0;
+		lopt.own_frequencies = new_freqs;
+	}
+	else if (next_band_mode == BAND_MODE_A)
+	{
+		lopt.channels = (int *) a_chans;
+		lopt.freqoption = 0;
+		lopt.chanoption = 1;
+	}
+	else
+	{
+		lopt.channels = (int *) bg_chans;
+		lopt.freqoption = 0;
+		lopt.chanoption = 1;
+	}
+
+	lopt.singlechan = 0;
+	lopt.singlefreq = 0;
+	lopt.band_mode = next_band_mode;
+
+	success = resume_hopper();
+	if (!success)
+	{
+		if (next_band_mode == BAND_MODE_AX && new_freqs != NULL)
+		{
+			free(new_freqs);
+		}
+		lopt.band_mode = old_band_mode;
+		lopt.own_frequencies = old_own_frequencies;
+		return (0);
+	}
+
+	if (next_band_mode != BAND_MODE_AX && old_own_frequencies != NULL)
+	{
+		free(old_own_frequencies);
+		lopt.own_frequencies = NULL;
+	}
+	else if (next_band_mode == BAND_MODE_AX && old_own_frequencies != NULL
+			 && old_own_frequencies != new_freqs)
+	{
+		free(old_own_frequencies);
+	}
+
+	snprintf(lopt.message,
+			 sizeof(lopt.message),
+			 "][ band switched to %s",
+			 band_mode_label(lopt.band_mode));
+	append_tui_message_history(lopt.message, time(NULL));
+	return (1);
+}
+
+// Function to convert channel array to frequency string
+static void channels_to_freq_string_ax(const int *channels, char *freq_string) {
+    //char buffer[MAX_FREQ_STR_LEN];
+	int len = strlen(freq_string);
+	int available = MAX_FREQS * MAX_FREQ_STR_LEN - len - 1; // Available space, -1 for null terminator
+
+    for (int i = 0; channels[i] != 0; ++i) {
+		
+        int freq = channel_to_frequency_ax(channels[i]);
+        if (freq > 0) {
+            // Calculate space needed for this frequency (including comma if not the first entry)
+			int needed_space = snprintf(NULL, 0, "%s%d", len > 0 ? "," : "", freq);
+
+			if (needed_space <= available) {
+				// Append frequency to string if enough space is available
+				int written = snprintf(freq_string + len, needed_space + 1, "%s%d",
+										len > 0 ? "," : "", freq);
+				len += written;
+				available -= written;
+			} else {
+				// Not enough space to append the next frequency
+				return;
+			}
+        }
+    }
+}
+
+static inline int invalid_channel(int chan, int is_6GHz)
 {
 	int i = 0;
-
+	const int *channel_array = is_6GHz ? ax_chans : abg_chans;
 	do
 	{
-		if (chan == abg_chans[i] && chan != 0) return (0);
-	} while (abg_chans[++i]);
+		if (chan == channel_array[i] && chan != 0) return (0);
+	} while (channel_array[++i]);
 	return (1);
 }
 
@@ -5405,7 +9558,7 @@ static int getchannels(const char * optarg)
 	char *optchan = NULL, *optc;
 	char * token = NULL;
 	int tmp_channels[GETCHANNELS_CHAN_MAX + 1] = {0};
-
+	
 	// got a NULL pointer?
 	if (optarg == NULL) return (-1);
 
@@ -5449,7 +9602,7 @@ static int getchannels(const char * optarg)
 					}
 					for (i = chan_first; i <= chan_last; i++)
 					{
-						if ((!invalid_channel(i)) && (chan_remain > 0))
+						if ((!invalid_channel(i, lopt.scan_11ax)) && (chan_remain > 0))
 						{
 							tmp_channels[chan_max - chan_remain] = i;
 							chan_remain--;
@@ -5482,7 +9635,7 @@ static int getchannels(const char * optarg)
 
 			if (sscanf(token, "%zu", &chan_cur) != EOF)
 			{
-				if ((!invalid_channel(chan_cur)) && (chan_remain > 0))
+				if ((!invalid_channel(chan_cur, lopt.scan_11ax)) && (chan_remain > 0))
 				{
 					tmp_channels[chan_max - chan_remain] = chan_cur;
 					chan_remain--;
@@ -5511,6 +9664,7 @@ static int getchannels(const char * optarg)
 	lopt.own_channels[i] = 0;
 
 	free(optc);
+
 	if (i == 1) return (lopt.own_channels[0]);
 	if (i == 0) return (-1);
 	return (0);
@@ -5528,7 +9682,7 @@ static int getfrequencies(const char * optarg)
 
 	// got a NULL pointer?
 	if (optarg == NULL) return -1;
-
+	
 	freq_remain = freq_max;
 
 	// create a writable string
@@ -5796,6 +9950,9 @@ static int check_channel(struct wif * wi[], int cards)
 #else
 			wi_set_channel(wi[i], lopt.channel[i]);
 #endif
+			lopt.channel[i] = chan;
+			lopt.frequency[i] = channel_to_frequency_for_band_mode(lopt.band_mode,
+																	chan);
 		}
 	}
 	return (0);
@@ -5817,6 +9974,8 @@ static int check_frequency(struct wif * wi[], int cards)
 					 wi_get_ifname(wi[i]),
 					 freq);
 			wi_set_freq(wi[i], lopt.frequency[i]);
+			lopt.frequency[i] = freq;
+			lopt.channel[i] = frequency_to_channel(freq);
 		}
 	}
 	return (0);
@@ -5940,7 +10099,8 @@ int main(int argc, char * argv[])
 	int caplen = 0, i, j, fdh, chan_count, freq_count;
 	int fd_raw[MAX_CARDS];
 	int ivs_only, found;
-	int freq[2];
+	int freq[3];
+	int band_ax_only = 0;
 	int num_opts = 0;
 	int option = 0;
 	int option_index = 0;
@@ -5948,12 +10108,9 @@ int main(int argc, char * argv[])
 	int wi_read_failed = 0;
 	int n = 0;
 	int output_format_first_time = 1;
-	unsigned char mac[6];
-#ifdef HAVE_PCRE2
-	int pcreerror;
-	PCRE2_UCHAR pcreerrorbuf[256];
-	PCRE2_SIZE pcreerroffset;
-#elif defined HAVE_PCRE
+	char freq_string[MAX_FREQS * MAX_FREQ_STR_LEN] = {0};
+
+#ifdef HAVE_PCRE
 	const char * pcreerror;
 	int pcreerroffset;
 #endif
@@ -5969,6 +10126,8 @@ int main(int argc, char * argv[])
 
 	struct wif * wi[MAX_CARDS];
 	struct rx_info ri;
+	g_wi = wi;
+	
 	unsigned char tmpbuf[4096];
 	unsigned char buffer[4096];
 	unsigned char * h80211;
@@ -6000,7 +10159,6 @@ int main(int argc, char * argv[])
 		   {"essid", 1, 0, 'N'},
 		   {"essid-regex", 1, 0, 'R'},
 		   {"channel", 1, 0, 'c'},
-		   {"ignore-other-chans", 0, 0, 'O'},
 		   {"gpsd", 0, 0, 'g'},
 		   {"ivs", 0, 0, 'i'},
 		   {"write", 1, 0, 'w'},
@@ -6019,12 +10177,22 @@ int main(int argc, char * argv[])
 		   {"wps", 0, 0, 'W'},
 		   {"background", 1, 0, 'K'},
 		   {"min-packets", 1, 0, 'n'},
-		   {"min-power", 1, 0, 'p'},
-		   {"min-rxq", 1, 0, 'q'},
 		   {"real-time", 0, 0, 'T'},
+		   {"80211ax", 0, 0, 'X'},
+		   {"ppi", 0, 0, 'p'},
+		   {"coords", 1, 0, 'y'},
+		   {"target", 1, 0, 'z'},
+		   {"tcp-server", 1, 0, 'V'},
+		   {"probes", 0, 0, 'P'},
+		   {"ax40", 0, 0, '4'},
+		   {"ax80", 0, 0, '8'},
+		   {"ax80+", 0, 0, '9'},
+		   {"ax160", 0, 0, '6'},
+		   {"cseg0", 1, 0, '0'},
+		   {"cseg1", 1, 0, '1'},
 		   {0, 0, 0, 0}};
 
-	pid_t main_pid = getpid();
+	main_pid = getpid();
 
 	console_utf8_enable();
 	ac_crypto_init();
@@ -6043,7 +10211,6 @@ int main(int argc, char * argv[])
 	h80211 = NULL;
 	ivs_only = 0;
 	lopt.chanoption = 0;
-	lopt.ignore_other_channels = 0;
 	lopt.freqoption = 0;
 	lopt.num_cards = 0;
 	fdh = 0;
@@ -6052,6 +10219,7 @@ int main(int argc, char * argv[])
 	lopt.chswitch = 0;
 	opt.usegpsd = 0;
 	lopt.channels = (int *) bg_chans;
+	lopt.band_support_mask = 0;
 	lopt.one_beacon = 1;
 	lopt.singlechan = 0;
 	lopt.singlefreq = 0;
@@ -6064,6 +10232,7 @@ int main(int argc, char * argv[])
 	opt.f_kis_xml = NULL;
 	opt.f_gps = NULL;
 	opt.f_logcsv = NULL;
+	opt.f_probes = NULL;
 	lopt.keyout = NULL;
 	opt.f_xor = NULL;
 	opt.sk_len = 0;
@@ -6071,8 +10240,7 @@ int main(int argc, char * argv[])
 	opt.sk_start = 0;
 	opt.prefix = NULL;
 	lopt.f_encrypt = 0;
-	lopt.asso_station = 0;
-	lopt.unasso_station = 0;
+	lopt.asso_client = 0;
 	lopt.f_essid = NULL;
 	lopt.f_essid_count = 0;
 	lopt.active_scan_sim = 0;
@@ -6102,6 +10270,7 @@ int main(int argc, char * argv[])
 	opt.output_format_kismet_csv = 1;
 	opt.output_format_kismet_netxml = 1;
 	opt.output_format_log_csv = 1;
+	opt.output_format_probes = 0;
 	lopt.gps_valid_interval
 		= 5; // If we dont get a new GPS update in 5 seconds - invalidate it
 	lopt.file_write_interval = 5; // Write file every 5 seconds by default
@@ -6110,15 +10279,24 @@ int main(int argc, char * argv[])
 	lopt.background_mode = -1;
 	lopt.do_exit = 0;
 	lopt.min_pkts = 2;
-	lopt.min_power = -120;
-	lopt.min_rxq = -1;
 	lopt.relative_time = 0;
-	lopt.color_on = 0;
-	lopt.color = TEXT_GREEN;
+	lopt.scan_11ax = 0;
+	lopt.band_support_mask = -1;
+	lopt.target = 0;
+	lopt.ppi = 0;
+	lopt.coordinates[0] = 0;
+	lopt.coordinates[1] = 0;
+	strlcpy(lopt.ip, "0.0.0.0", sizeof(lopt.ip));
+	lopt.port = 23456;
+	lopt.tcp_sock_fd = -1;
+	lopt.ax_bw = 0; // can be 4 (40MHz), 8 (80MHz), 9 (80+80), 6 (160MHz)
+	lopt.c_seg0 = 0;
+	lopt.c_seg1 = 0;
+
 #ifdef CONFIG_LIBNL
 	lopt.htval = CHANNEL_NO_HT;
 #endif
-#if defined HAVE_PCRE2 || defined HAVE_PCRE
+#ifdef HAVE_PCRE
 	lopt.f_essid_regex = NULL;
 #endif
 
@@ -6151,9 +10329,7 @@ int main(int argc, char * argv[])
 		lopt.channel[i] = 0;
 	}
 
-	lopt.rBSSID = (pMAC_t) malloc(sizeof(struct MAC_list));
-	ALLEGE(lopt.rBSSID != NULL);
-	memset(lopt.rBSSID, 0, sizeof(struct MAC_list));
+	memset(opt.f_bssid, '\x00', 6);
 	memset(opt.f_netmask, '\x00', 6);
 	memset(lopt.wpa_bssid, '\x00', 6);
 
@@ -6212,12 +10388,12 @@ int main(int argc, char * argv[])
 	{
 		option_index = 0;
 
-		option = getopt_long(
-			argc,
-			argv,
-			"b:c:Oegiw:s:t:u:m:d:N:R:azHDB:Ahf:r:EC:o:x:MUI:WK:n:p:q:T",
-			long_options,
-			&option_index);
+		option
+			= getopt_long(argc,
+						  argv,
+						  "b:c:egiw:s:t:u:m:d:N:R:aHDB:Ahf:r:EC:o:x:MUI:WK:n:T:Xpz:y:V:P",
+						  long_options,
+						  &option_index);
 
 		if (option < 0) break;
 
@@ -6280,12 +10456,7 @@ int main(int argc, char * argv[])
 
 			case 'a':
 
-				lopt.asso_station = 1;
-				break;
-
-			case 'z':
-
-				lopt.unasso_station = 1;
+				lopt.asso_client = 1;
 				break;
 
 			case 'A':
@@ -6309,6 +10480,7 @@ int main(int argc, char * argv[])
 				break;
 
 			case 'U':
+
 				lopt.show_uptime = 1;
 				break;
 
@@ -6316,6 +10488,12 @@ int main(int argc, char * argv[])
 
 				lopt.show_wps = 1;
 				break;
+			
+			case 'X':
+
+    			// Set a flag indicating that 802.11ax scanning is selected
+    			lopt.scan_11ax = 1;
+    			break;
 
 			case 'c':
 
@@ -6324,8 +10502,7 @@ int main(int argc, char * argv[])
 					if (lopt.chanoption == 1)
 						printf("Notice: Channel range already given\n");
 					else
-						printf("Notice: Channel already given (%d)\n",
-							   lopt.channel[0]);
+						printf("Notice: Channel already given (%d)\n", lopt.channel[0]);
 					break;
 				}
 
@@ -6337,18 +10514,30 @@ int main(int argc, char * argv[])
 					return (EXIT_FAILURE);
 				}
 
-				lopt.chanoption = 1;
-
-				if (lopt.channel[0] == 0)
-				{
+				// if getchannels returns 0, that means we had a channel list
+				if (lopt.channel[0] == 0) {
 					lopt.channels = lopt.own_channels;
+				} else { // otherwise we just had a single channel
+					lopt.channels = lopt.channel;
+				}
+
+				if (lopt.scan_11ax) {
+					// Convert the channel array to frequency string for 6 GHz channels
+					// Function to be implemented: channels_to_freq_string_ax(lopt.channel, lopt.freqstring);
+					// For now, assuming the function fills lopt.freqstring appropriately
+					channels_to_freq_string_ax(lopt.channels, freq_string);
+
+					freq_string[sizeof(freq_string) - 1] = '\0';
+
+					lopt.chanoption = 0; // Reset channel option
+					lopt.freqoption = 1; // Set frequency option
+					lopt.freqstring = freq_string;
+					break;
+				} else {
+					lopt.chanoption = 1;
 					break;
 				}
-				lopt.channels = (int *) bg_chans;
-				break;
-
-			case 'O':
-				lopt.ignore_other_channels = 1;
+				lopt.channels = (int *) bg_chans; // Use standard channel set
 				break;
 
 			case 'C':
@@ -6376,13 +10565,7 @@ int main(int argc, char * argv[])
 				break;
 
 			case 'b':
-
-				if (lopt.chanoption == 1)
-				{
-					printf("Notice: Channel range already given\n");
-					break;
-				}
-				freq[0] = freq[1] = 0;
+				freq[0] = freq[1] = freq[2] = 0; // freq[0] for b/g, freq[1] for a, freq[2] for ax
 
 				for (i = 0; i < (int) strlen(optarg); i++) //-V814
 				{
@@ -6390,6 +10573,8 @@ int main(int argc, char * argv[])
 						freq[1] = 1;
 					else if (optarg[i] == 'b' || optarg[i] == 'g')
 						freq[0] = 1;
+					else if (optarg[i] == 'x')
+						freq[2] = 1;
 					else
 					{
 						printf("Error: invalid band (%c)\n", optarg[i]);
@@ -6398,16 +10583,92 @@ int main(int argc, char * argv[])
 					}
 				}
 
-				if (freq[1] + freq[0] == 2)
-					lopt.channels = (int *) abg_chans;
-				else
-				{
+				// Check if 'ax' band is specified
+				if (freq[2] == 1) {
+					band_ax_only = (freq[0] == 0 && freq[1] == 0);
+					lopt.scan_11ax = 1;
+
+					// Accumulate frequencies from specified bands
+					if (freq[0] == 1)
+						channels_to_freq_string_bg(bg_chans, freq_string); // Append bg frequencies
 					if (freq[1] == 1)
+						channels_to_freq_string_a(a_chans, freq_string); // Append a frequencies
+					channels_to_freq_string_ax(ax_chans, freq_string); // Append ax frequencies
+
+					freq_string[sizeof(freq_string) - 1] = '\0';
+
+					lopt.freqstring = freq_string;
+					
+					lopt.chanoption = 0; // Reset channel option
+					lopt.freqoption = 1; // Set frequency option
+				} else {
+					// Maintain default behavior for setting lopt.channels
+					if (freq[1] + freq[0] == 2)
+						lopt.channels = (int *) abg_chans;
+					else if (freq[1] == 1)
 						lopt.channels = (int *) a_chans;
 					else
 						lopt.channels = (int *) bg_chans;
+					lopt.chanoption = 1;
+				}
+				break;
+
+			case 'z':
+				if (num_targets >= MAX_TARGETS) {
+					fprintf(stderr, "Too many target MACs (max %d).\n", MAX_TARGETS);
+					return EXIT_FAILURE;
 				}
 
+				if (convertMACToBytesWithWildcards(optarg, targets[num_targets], wildcard_nibbles[num_targets]) == 0) {
+
+					num_targets++;
+				} else if (parseMACAddressFile(optarg) != 0) {
+					fprintf(stderr, "Invalid MAC address or file error.\n");
+					return EXIT_FAILURE;
+				}
+
+				lopt.target = 1;
+				color_on();
+				snprintf(lopt.message, sizeof(lopt.message), "][ targeting on");
+				break;
+
+			case 'y':
+				if (optarg[0] == '-') {
+					fprintf(stderr, "You must pass coordinates when using the --coord option.\n");
+					exit(EXIT_FAILURE);
+				}
+				// Attempt to parse latitude and longitude
+				if (sscanf(optarg, "%lf,%lf", &lopt.coordinates[0], &lopt.coordinates[1]) == 2) {
+					// Validate latitude and longitude
+					if (lopt.coordinates[0] < -90.0 || lopt.coordinates[0] > 90.0 ||
+						lopt.coordinates[1] < -180.0 || lopt.coordinates[1] > 180.0) {
+						fprintf(stderr, "Invalid coordinates: %s\n", optarg);
+						exit(EXIT_FAILURE);
+					}
+				} else {
+					fprintf(stderr, "Invalid format for coordinates: %s\n", optarg);
+					exit(EXIT_FAILURE);
+				}
+				size_t y_len = strlen(lopt.message);
+    			snprintf(lopt.message + y_len, sizeof(lopt.message) - y_len, " ][ Fixed Coords %.6f,%.6f", lopt.coordinates[0], lopt.coordinates[1]);
+				
+				break;
+
+			case 'V':
+
+				if (!validate_ip_port(optarg)) {
+					fprintf(stderr, "Invalid server address format!\n");
+					exit(EXIT_FAILURE);
+				}
+				lopt.tcp_sock_fd = 0;
+				size_t V_len = strlen(lopt.message);
+    			snprintf(lopt.message + V_len, sizeof(lopt.message) - V_len, " ][ TCP Server On %s:%d", lopt.ip, lopt.port);
+				break;
+
+			case 'P':
+
+				opt.record_data = 1;
+				opt.output_format_probes = 1;
 				break;
 
 			case 'i':
@@ -6440,6 +10701,11 @@ int main(int argc, char * argv[])
 			case 'g':
 
 				opt.usegpsd = 1;
+				break;
+
+			case 'p':
+				
+				lopt.ppi = 1;
 				break;
 
 			case 'w':
@@ -6524,11 +10790,12 @@ int main(int argc, char * argv[])
 
 			case 'd':
 
-				if (getmac(optarg, 1, mac) == 0)
+				if (memcmp(opt.f_bssid, NULL_MAC, 6) != 0)
 				{
-					addMAC(lopt.rBSSID, mac);
+					printf("Notice: bssid already given\n");
+					break;
 				}
-				else
+				if (getmac(optarg, 1, opt.f_bssid) != 0)
 				{
 					printf("Notice: invalid bssid\n");
 					printf("\"%s --help\" for help.\n", argv[0]);
@@ -6549,7 +10816,7 @@ int main(int argc, char * argv[])
 
 			case 'R':
 
-#if defined HAVE_PCRE2 || defined HAVE_PCRE
+#ifdef HAVE_PCRE
 				if (lopt.f_essid_regex != NULL)
 				{
 					printf("Error: ESSID regular expression already given. "
@@ -6558,17 +10825,14 @@ int main(int argc, char * argv[])
 				}
 
 				lopt.f_essid_regex
-					= COMPAT_PCRE_COMPILE(optarg, &pcreerror, &pcreerroffset);
+					= pcre_compile(optarg, 0, &pcreerror, &pcreerroffset, NULL);
 
 				if (lopt.f_essid_regex == NULL)
 				{
-#ifdef HAVE_PCRE2
-					pcre2_get_error_message(
-						pcreerror, pcreerrorbuf, sizeof(pcreerrorbuf));
-					COMPAT_PCRE_PRINT_ERROR(pcreerroffset, pcreerrorbuf);
-#elif defined HAVE_PCRE
-					COMPAT_PCRE_PRINT_ERROR(pcreerroffset, pcreerror);
-#endif
+					printf("Error: regular expression compilation failed at "
+						   "offset %d: %s; aborting\n",
+						   pcreerroffset,
+						   pcreerror);
 					exit(EXIT_FAILURE);
 				}
 #else
@@ -6586,28 +10850,6 @@ int main(int argc, char * argv[])
 			case 'n':
 
 				lopt.min_pkts = strtoul(optarg, NULL, 10);
-				break;
-
-			case 'p':
-
-				if (sscanf(optarg, "%" SCNd16, &lopt.min_power) != 1)
-				{
-					printf("Error: invalid --min-power (or -p) value\n");
-					printf("\"%s --help\" for help.\n", argv[0]);
-					return (EXIT_FAILURE);
-				}
-				break;
-
-			case 'q':
-
-				if ((sscanf(optarg, "%" SCNd8, &lopt.min_rxq) != 1)
-					|| (lopt.min_rxq > 100) || (lopt.min_rxq < 0))
-				{
-					printf("Error: invalid --min-rxq (or -q) value (valid "
-						   "range: 0..100)\n");
-					printf("\"%s --help\" for help.\n", argv[0]);
-					return (EXIT_FAILURE);
-				}
 				break;
 
 			case 'o':
@@ -6738,7 +10980,7 @@ int main(int argc, char * argv[])
 
 			case 'H':
 				airodump_usage();
-				return (EXIT_SUCCESS);
+				return (EXIT_FAILURE);
 
 			case 'x':
 
@@ -6746,7 +10988,22 @@ int main(int argc, char * argv[])
 
 				if (lopt.active_scan_sim <= 0) lopt.active_scan_sim = 0;
 				break;
-
+			case '0':
+#ifndef CONFIG_LIBNL
+				printf("AX Center Segment 0 unsupported\n");
+				return (EXIT_FAILURE);
+#else
+				lopt.c_seg0 = strtoul(optarg, NULL, 10);
+#endif
+				break;
+			case '1':
+#ifndef CONFIG_LIBNL
+				printf("AX Center Segment 1 unsupported\n");
+				return (EXIT_FAILURE);
+#else
+				lopt.c_seg1 = strtoul(optarg, NULL, 10);
+#endif
+				break;
 			case '2':
 #ifndef CONFIG_LIBNL
 				printf("HT Channel unsupported\n");
@@ -6771,13 +11028,45 @@ int main(int argc, char * argv[])
 				lopt.htval = CHANNEL_HT40_PLUS;
 #endif
 				break;
-
+			case '4':
+#ifndef CONFIG_LIBNL
+				printf("AX 40 MHz Bandwidth unsupported\n");
+				return (EXIT_FAILURE);
+#else
+				lopt.ax_bw = CHANNEL_AX40;
+#endif
+				break;
+			case '8':
+#ifndef CONFIG_LIBNL
+				printf("AX 80 MHz Bandwidth unsupported\n");
+				return (EXIT_FAILURE);
+#else
+				lopt.ax_bw = CHANNEL_AX80;
+#endif
+				break;
+			case '9':
+#ifndef CONFIG_LIBNL
+				printf("AX 80+80 MHz Bandwidth unsupported\n");
+				return (EXIT_FAILURE);
+#else
+				lopt.ax_bw = CHANNEL_AX80_80;
+#endif
+				break;
+			case '6':
+#ifndef CONFIG_LIBNL
+				printf("AX 160 MHz Bandwidth unsupported\n");
+				return (EXIT_FAILURE);
+#else
+				lopt.ax_bw = CHANNEL_AX160;
+#endif
+				break;
 			default:
 				airodump_usage();
 				return (EXIT_FAILURE);
 		}
+		
 	} while (1);
-
+	
 	if (argc - optind != 1 && opt.s_file == NULL)
 	{
 		if (argc == 1)
@@ -6798,29 +11087,17 @@ int main(int argc, char * argv[])
 	if (argc - optind == 1) lopt.s_iface = argv[argc - 1];
 
 	if ((memcmp(opt.f_netmask, NULL_MAC, 6) != 0)
-		&& (getMACcount(lopt.rBSSID) == 0))
+		&& (memcmp(opt.f_bssid, NULL_MAC, 6) == 0))
 	{
 		printf("Notice: specify bssid \"--bssid\" with \"--netmask\"\n");
 		printf("\"%s --help\" for help.\n", argv[0]);
 		return (EXIT_FAILURE);
 	}
 
-	if (lopt.ignore_other_channels && !lopt.chanoption)
-	{
-		printf("Error: --ignore-other-chans requires --channel (or -c)\n");
-		printf("\"%s --help\" for help.\n", argv[0]);
-		return (EXIT_FAILURE);
-	}
-
-	if ((lopt.min_rxq != -1) && !(lopt.chanoption || lopt.freqoption))
-	{
-		printf("Error: --min-rxq (or -q) requires --channel (or -c) or -C\n");
-		printf("\"%s --help\" for help.\n", argv[0]);
-		return (EXIT_FAILURE);
-	}
-
 	if (lopt.show_wps && lopt.show_manufacturer)
 		lopt.maxsize_essid_seen += lopt.maxsize_wps_seen;
+
+	lopt.band_mode = infer_band_mode();
 
 	if (lopt.s_iface != NULL)
 	{
@@ -6839,14 +11116,83 @@ int main(int argc, char * argv[])
 			if (fd_raw[i] > fdh) fdh = fd_raw[i];
 		}
 
+		lopt.band_support_mask = band_support_mask_for_cards(wi, lopt.num_cards);
+		if (lopt.band_support_mask >= 0 && !band_mode_is_supported(lopt.band_mode))
+		{
+			int fallback_band_mode = next_supported_band_mode(lopt.band_mode, 1);
+
+			if (fallback_band_mode != lopt.band_mode)
+			{
+				if (fallback_band_mode == BAND_MODE_AX)
+				{
+					if (lopt.own_frequencies != NULL)
+					{
+						free(lopt.own_frequencies);
+						lopt.own_frequencies = NULL;
+					}
+					if (!build_ax_frequency_list(&lopt.own_frequencies))
+					{
+						printf("No valid 6 GHz frequencies available.\n");
+						return (EXIT_FAILURE);
+					}
+					lopt.freqoption = 1;
+					lopt.chanoption = 0;
+					lopt.channels = (int *) ax_chans;
+					lopt.scan_11ax = 1;
+					lopt.freqstring = NULL;
+				}
+				else
+				{
+					lopt.channels = (fallback_band_mode == BAND_MODE_A)
+									 ? (int *) a_chans
+									 : (int *) bg_chans;
+					lopt.freqoption = 0;
+					lopt.chanoption = 1;
+					lopt.scan_11ax = 0;
+					lopt.freqstring = NULL;
+					if (lopt.own_frequencies != NULL)
+					{
+						free(lopt.own_frequencies);
+						lopt.own_frequencies = NULL;
+					}
+				}
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ %s unsupported; using %s",
+						 band_mode_label(lopt.band_mode),
+						 band_mode_label(fallback_band_mode));
+				append_tui_message_history(lopt.message, time(NULL));
+				lopt.band_mode = fallback_band_mode;
+			}
+			else
+			{
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ no supported bands available");
+				append_tui_message_history(lopt.message, time(NULL));
+			}
+		}
+
 		if (lopt.freqoption == 1 && lopt.freqstring != NULL) // use frequencies
 		{
-			detect_frequencies(wi[0]);
-			lopt.frequency[0] = getfrequencies(lopt.freqstring);
-			if (lopt.frequency[0] == -1)
+			if (band_ax_only)
 			{
-				printf("No valid frequency given.\n");
-				return (EXIT_FAILURE);
+				if (!build_ax_frequency_list(&lopt.own_frequencies))
+				{
+					printf("No valid 6 GHz frequencies available.\n");
+					return (EXIT_FAILURE);
+				}
+				lopt.frequency[0] = 0;
+			}
+			else
+			{
+				detect_frequencies(wi[0]);
+				lopt.frequency[0] = getfrequencies(lopt.freqstring);
+				if (lopt.frequency[0] == -1)
+				{
+					printf("No valid frequency given.\n");
+					return (EXIT_FAILURE);
+				}
 			}
 
 			rearrange_frequencies();
@@ -6860,6 +11206,7 @@ int main(int argc, char * argv[])
 			{
 				IGNORE_NZ(pipe(lopt.ch_pipe));
 				IGNORE_NZ(pipe(lopt.cd_pipe));
+				set_hopper_pipe_nonblocking();
 
 				struct sigaction action;
 				action.sa_flags = 0;
@@ -6868,8 +11215,12 @@ int main(int argc, char * argv[])
 
 				if (sigaction(SIGUSR1, &action, NULL) == -1)
 					perror("sigaction(SIGUSR1)");
+				hopper_pipe_ready = 1;
 
-				if (!fork())
+				reset_hopper_reject_state();
+				hopper_reject_total = freq_count;
+				hopper_pid = fork();
+				if (hopper_pid == 0)
 				{
 					/* reopen cards.  This way parent & child don't share
 					* resources for
@@ -6898,12 +11249,25 @@ int main(int argc, char * argv[])
 					frequency_hopper(wi, lopt.num_cards, freq_count, main_pid);
 					exit(EXIT_FAILURE);
 				}
+				else if (hopper_pid < 0)
+				{
+					perror("fork");
+					exit(EXIT_FAILURE);
+				}
 			}
 			else
 			{
 				for (i = 0; i < lopt.num_cards; i++)
 				{
+#ifdef CONFIG_LIBNL
+					int result;
+					result = wi_set_freq_ax(wi[i], lopt.frequency[0], lopt.ax_bw, lopt.c_seg0, lopt.c_seg1);
+					if (result != 0) {
+						exit(EXIT_FAILURE);
+					}
+#else
 					wi_set_freq(wi[i], lopt.frequency[0]);
+#endif
 					lopt.frequency[i] = lopt.frequency[0];
 				}
 				lopt.singlefreq = 1;
@@ -6920,6 +11284,7 @@ int main(int argc, char * argv[])
 			{
 				IGNORE_NZ(pipe(lopt.ch_pipe));
 				IGNORE_NZ(pipe(lopt.cd_pipe));
+				set_hopper_pipe_nonblocking();
 
 				struct sigaction action;
 				action.sa_flags = 0;
@@ -6928,8 +11293,12 @@ int main(int argc, char * argv[])
 
 				if (sigaction(SIGUSR1, &action, NULL) == -1)
 					perror("sigaction(SIGUSR1)");
+				hopper_pipe_ready = 1;
 
-				if (!fork())
+				reset_hopper_reject_state();
+				hopper_reject_total = chan_count;
+				hopper_pid = fork();
+				if (hopper_pid == 0)
 				{
 					/* reopen cards.  This way parent & child don't share
 					* resources for
@@ -6958,6 +11327,11 @@ int main(int argc, char * argv[])
 					channel_hopper(wi, lopt.num_cards, chan_count, main_pid);
 					exit(EXIT_FAILURE);
 				}
+				else if (hopper_pid < 0)
+				{
+					perror("fork");
+					exit(EXIT_FAILURE);
+				}
 			}
 			else
 			{
@@ -6980,6 +11354,22 @@ int main(int argc, char * argv[])
 	{
 		perror("setuid");
 	}
+
+	// we need to specify the gpsd option when running the ppi option
+	if (!(opt.usegpsd) && lopt.ppi) {
+		// but only if we don't specify fixed coordinates
+		if ((lopt.coordinates[0] == 500 && lopt.coordinates[1] == 500)) {
+			printf("--gpsd option must be used with ppi creation option, unless specifying fixed coords. Ignoring this flag.\n");
+			sleep(1);
+			lopt.ppi = 0;
+		}
+	}
+
+	if (lopt.tcp_sock_fd == 0) {
+		lopt.tcp_sock_fd = start_tcp_server(lopt.ip, lopt.port);  // Start TCP server, get client socket
+	}
+	// need to set the mactime to zero in the event there is no TSFT in the driver-generated radiotap
+	ri.ri_mactime = 0;
 
 	/* check if there is an input file */
 	if (opt.s_file != NULL)
@@ -7026,10 +11416,16 @@ int main(int argc, char * argv[])
 
 	/* open or create the output files */
 
-	if (opt.record_data)
-		if (dump_initialize_multi_format(lopt.dump_prefix, ivs_only))
+	if (opt.record_data) {
+		if (lopt.dump_prefix == NULL)
+		{
+			fprintf(stderr, "Output prefix required with -w / --write.\n");
 			return (EXIT_FAILURE);
-
+		}
+		int ppi = lopt.ppi;
+		if (dump_initialize_multi_format(lopt.dump_prefix, ivs_only, ppi, &lopt.tcp_sock_fd))
+			return (EXIT_FAILURE);
+	}
 	struct sigaction action;
 	action.sa_flags = 0;
 	action.sa_handler = &sighandler;
@@ -7039,6 +11435,7 @@ int main(int argc, char * argv[])
 	if (sigaction(SIGSEGV, &action, NULL) == -1) perror("sigaction(SIGSEGV)");
 	if (sigaction(SIGTERM, &action, NULL) == -1) perror("sigaction(SIGTERM)");
 	if (sigaction(SIGWINCH, &action, NULL) == -1) perror("sigaction(SIGWINCH)");
+	if (sigaction(SIGPIPE, &action, NULL) == -1) perror("sigaction(SIGPIPE)");
 
 	/* fill oui struct if ram is greater than 32 MB */
 	if (get_ram_size() > MIN_RAM_SIZE_LOAD_OUI_RAM)
@@ -7060,8 +11457,13 @@ int main(int argc, char * argv[])
 		waitpid(-1, NULL, WNOHANG);
 	}
 
-	hide_cursor();
-	erase_display(2);
+	if (!airodump_tui_start(&tui_state))
+	{
+		fprintf(stderr, "ncurses TUI is required but could not be started.\n");
+		return (EXIT_FAILURE);
+	}
+	use_ncurses_tui = 1;
+	(void) atexit(restore_terminal);
 
 	start_time = time(NULL);
 	tt1 = time(NULL);
@@ -7094,7 +11496,7 @@ int main(int argc, char * argv[])
 	// background
 	if (lopt.background_mode == -1) lopt.background_mode = is_background();
 
-	if (!lopt.background_mode
+	if (!lopt.background_mode && !use_ncurses_tui
 		&& pthread_create(&(lopt.input_tid), NULL, &input_thread, NULL) != 0)
 	{
 		perror("pthread_create failed");
@@ -7103,9 +11505,19 @@ int main(int argc, char * argv[])
 
 	while (1)
 	{
+		int needs_render = 0;
+
 		if (lopt.do_exit)
 		{
 			break;
+		}
+
+		if (hopper_event_pending && use_ncurses_tui && !lopt.background_mode)
+		{
+			hopper_event_pending = 0;
+			ALLEGE(pthread_mutex_lock(&(lopt.mx_print)) == 0);
+			render_output();
+			ALLEGE(pthread_mutex_unlock(&(lopt.mx_print)) == 0);
 		}
 
 		if (time(NULL) - tt1 >= lopt.file_write_interval)
@@ -7126,9 +11538,9 @@ int main(int argc, char * argv[])
 
 		if (time(NULL) - tt2 > 5)
 		{
-			if (lopt.sort_by != SORT_BY_NOTHING)
+			if (ap_sort_is_live(lopt.sort_by))
 			{
-				/* sort the APs by power */
+				/* refresh live AP sort order */
 				ALLEGE(pthread_mutex_lock(&(lopt.mx_sort)) == 0);
 				dump_sort();
 				ALLEGE(pthread_mutex_unlock(&(lopt.mx_sort)) == 0);
@@ -7179,6 +11591,10 @@ int main(int argc, char * argv[])
 				if (lopt.singlefreq) check_frequency(wi, lopt.num_cards);
 			}
 		}
+
+		ri.ri_mactime = 0;
+		ri.ri_channel = 0;
+		ri.ri_freq = 0;
 
 		if (opt.s_file != NULL)
 		{
@@ -7280,7 +11696,7 @@ int main(int argc, char * argv[])
 				/* go through the radiotap arguments we have been given
 				 * by the driver
 				 */
-
+				
 				while (ieee80211_radiotap_iterator_next(&iterator) >= 0)
 				{
 					switch (iterator.this_arg_index)
@@ -7321,9 +11737,13 @@ int main(int argc, char * argv[])
 							break;
 
 						case IEEE80211_RADIOTAP_CHANNEL:
-							ri.ri_channel = getChannelFromFrequency(
-								le16toh(*(uint16_t *) iterator.this_arg));
+						{
+							uint16_t frequency = le16toh(*(uint16_t *) iterator.this_arg);
+
+							ri.ri_freq = frequency;
+							ri.ri_channel = getChannelFromFrequency(frequency);
 							break;
+						}
 
 						case IEEE80211_RADIOTAP_RATE:
 							ri.ri_rate = (*iterator.this_arg) * 500000;
@@ -7385,6 +11805,11 @@ int main(int argc, char * argv[])
 			{
 				FD_SET(fd_raw[i], &rfds); // NOLINT(hicpp-signed-bitwise)
 			}
+			if (use_ncurses_tui)
+			{
+				FD_SET(STDIN_FILENO, &rfds);
+				if (STDIN_FILENO > fdh) fdh = STDIN_FILENO;
+			}
 
 			tv0.tv_sec = lopt.update_s;
 			tv0.tv_usec = (lopt.update_s == 0) ? REFRESH_RATE : 0;
@@ -7405,7 +11830,7 @@ int main(int argc, char * argv[])
 				perror("select failed");
 
 				/* Restore terminal */
-				show_cursor();
+				restore_terminal();
 
 				return (EXIT_FAILURE);
 			}
@@ -7417,6 +11842,30 @@ int main(int argc, char * argv[])
 
 		time_slept += 1000000UL * (tv2.tv_sec - tv1.tv_sec)
 					  + (tv2.tv_usec - tv1.tv_usec);
+
+		if (use_ncurses_tui)
+		{
+			int keycode;
+
+			if (tui_resize_pending)
+			{
+				tui_state.resize_pending = 1;
+				tui_resize_pending = 0;
+				needs_render = 1;
+			}
+
+			while ((keycode = airodump_tui_getch(&tui_state)) != -1)
+			{
+				if (handle_keycode(keycode)) needs_render = 1;
+			}
+		}
+
+		if (needs_render && !lopt.background_mode)
+		{
+			ALLEGE(pthread_mutex_lock(&(lopt.mx_print)) == 0);
+			render_output();
+			ALLEGE(pthread_mutex_unlock(&(lopt.mx_print)) == 0);
+		}
 
 		if (time_slept > REFRESH_RATE && time_slept > lopt.update_s * 1000000)
 		{
@@ -7438,7 +11887,7 @@ int main(int argc, char * argv[])
 			{
 				ALLEGE(pthread_mutex_lock(&(lopt.mx_print)) == 0);
 
-				dump_print(lopt.ws.ws_row, lopt.ws.ws_col, lopt.num_cards);
+				render_output();
 
 				ALLEGE(pthread_mutex_unlock(&(lopt.mx_print)) == 0);
 			}
@@ -7481,7 +11930,7 @@ int main(int argc, char * argv[])
 							printf("Can't reopen %s\n", ifnam);
 
 							/* Restore terminal */
-							show_cursor();
+							restore_terminal();
 
 							exit(EXIT_FAILURE);
 						}
@@ -7510,7 +11959,18 @@ int main(int argc, char * argv[])
 			quitting = 0;
 			snprintf(lopt.message, sizeof(lopt.message), "]");
 		}
+
+		if (deauth_launching && time(NULL) - deauth_event_ts > 3)
+		{
+			deauth_event_ts = 0;
+			deauth_launching = 0;
+			snprintf(lopt.message, sizeof(lopt.message), "]");
+		}
 	}
+
+	if (lopt.tcp_sock_fd > 0) {
+        close(lopt.tcp_sock_fd);  // Close socket after capture loop exits
+    }
 
 	if (lopt.batt) free(lopt.batt);
 
@@ -7526,13 +11986,7 @@ int main(int argc, char * argv[])
 
 	if (lopt.keyout) free(lopt.keyout);
 
-#ifdef HAVE_PCRE2
-	if (lopt.f_essid_regex)
-	{
-		pcre2_match_data_free(lopt.f_essid_match_data);
-		pcre2_code_free(lopt.f_essid_regex);
-	}
-#elif defined HAVE_PCRE
+#ifdef HAVE_PCRE
 	if (lopt.f_essid_regex) pcre_free(lopt.f_essid_regex);
 #endif
 
@@ -7562,6 +12016,8 @@ int main(int argc, char * argv[])
 		if (opt.output_format_pcap && opt.f_cap != NULL) fclose(opt.f_cap);
 		if (opt.f_ivs != NULL) fclose(opt.f_ivs);
 		if (opt.f_logcsv != NULL) fclose(opt.f_logcsv);
+		if (opt.f_probes != NULL) fclose(opt.f_probes);
+		free_probe_log_entries();
 	}
 
 	if (!lopt.save_gps)
@@ -7577,7 +12033,7 @@ int main(int argc, char * argv[])
 		if (retval != NULL) free(retval);
 	}
 
-	if (!lopt.background_mode)
+	if (!lopt.background_mode && !use_ncurses_tui)
 	{
 		pthread_join(lopt.input_tid, NULL);
 	}
@@ -7638,11 +12094,7 @@ int main(int argc, char * argv[])
 		}
 	}
 
-	flushMACs(lopt.rBSSID);
-	free(lopt.rBSSID);
-
-	reset_term();
-	show_cursor();
+	restore_terminal();
 
 	return (EXIT_SUCCESS);
 }

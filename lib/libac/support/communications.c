@@ -945,6 +945,7 @@ int capture_ask_packet(int * caplen, int just_grab)
 #define AIRODUMP_NG_GPS_EXT "gps"
 #define AIRODUMP_NG_CAP_EXT "cap"
 #define AIRODUMP_NG_LOG_CSV_EXT "log.csv"
+#define AIRODUMP_NG_PROBES_EXT "probes.csv"
 
 static const char * f_ext[] = {AIRODUMP_NG_CSV_EXT,
 							   AIRODUMP_NG_GPS_EXT,
@@ -952,10 +953,14 @@ static const char * f_ext[] = {AIRODUMP_NG_CSV_EXT,
 							   IVS2_EXTENSION,
 							   KISMET_CSV_EXT,
 							   KISMET_NETXML_EXT,
-							   AIRODUMP_NG_LOG_CSV_EXT};
+							   AIRODUMP_NG_LOG_CSV_EXT,
+							   AIRODUMP_NG_PROBES_EXT};
 
 /* setup the output files */
-int dump_initialize_multi_format(char * prefix, int ivs_only)
+int dump_initialize_multi_format(char * prefix,
+						 int ivs_only,
+						 int ppi,
+						 int * tcp_sock_fd)
 {
 	REQUIRE(prefix != NULL);
 	REQUIRE(*prefix != '\0');
@@ -1048,6 +1053,31 @@ int dump_initialize_multi_format(char * prefix, int ivs_only)
 				"Longitude Error, Type\r\n");
 	}
 
+	/* create the output probe CSV file */
+	if (opt.output_format_probes)
+	{
+		memset(ofn, 0, ofn_len);
+		snprintf(ofn,
+				 ofn_len,
+				 "%s-%02d.%s",
+				 prefix,
+				 opt.f_index,
+				 AIRODUMP_NG_PROBES_EXT);
+
+		if ((opt.f_probes = fopen(ofn, "wb+")) == NULL)
+		{
+			perror("fopen failed");
+			fprintf(stderr, "Could not create \"%s\".\n", ofn);
+			free(ofn);
+
+			return (1);
+		}
+
+		setvbuf(opt.f_probes, NULL, _IOLBF, 0);
+		fprintf(opt.f_probes,
+				"First seen,Last seen,Station MAC,Times seen,Probe ESSID\r\n");
+	}
+
 	/* create the output Kismet CSV file */
 	if (opt.output_format_kismet_csv)
 	{
@@ -1135,7 +1165,16 @@ int dump_initialize_multi_format(char * prefix, int ivs_only)
 		pfh.thiszone = 0;
 		pfh.sigfigs = 0;
 		pfh.snaplen = 65535;
-		pfh.linktype = LINKTYPE_IEEE802_11;
+		pfh.linktype = ppi ? LINKTYPE_PPI_HDR : LINKTYPE_IEEE802_11;
+
+		if (tcp_sock_fd != NULL && *tcp_sock_fd > 0)
+		{
+			if (send(*tcp_sock_fd, &pfh, sizeof(pfh), 0) <= 0)
+			{
+				close(*tcp_sock_fd);
+				*tcp_sock_fd = -1;
+			}
+		}
 
 		if (fwrite(&pfh, 1, sizeof(pfh), opt.f_cap) != (size_t) sizeof(pfh))
 		{
@@ -1200,7 +1239,7 @@ int dump_initialize(char * prefix)
 {
 	opt.output_format_pcap = 1;
 
-	return dump_initialize_multi_format(prefix, 0);
+	return dump_initialize_multi_format(prefix, 0, 0, NULL);
 }
 
 int check_shared_key(const uint8_t * h80211, size_t caplen)
