@@ -2427,7 +2427,7 @@ void airodump_tui_render(struct airodump_tui_state * state,
 	{
 		if (view->show_sta)
 		{
-			ap_height = MAX(4, (content_rows * 40) / 100);
+			ap_height = MAX(4, content_rows / 2);
 			if (ap_height > content_rows - 4)
 				ap_height = MAX(4, content_rows - 4);
 		}
