@@ -2082,7 +2082,7 @@ static void render_status_line(const struct airodump_tui_state * state,
 
 	snprintf(line,
 			 sizeof(line),
-	"?:help | m:messages | L:station filter | v:channels | b/B:band | l/r:lock/resume | d:deauth | s/S:sort | i:order | Tab/Left/Right:focus | Arrows/PgUp/PgDn/Home/End:scroll | q:quit");
+	"Arrows/PgUp/PgDn/Home/End: navigate | Tab/Left/Right: pane | ?: help | q: quit");
 
 	if (COLS < 1) return;
 	width = MIN(COLS - 1, (int) sizeof(line) - 1);
