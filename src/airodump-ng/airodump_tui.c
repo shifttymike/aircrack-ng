@@ -1638,6 +1638,16 @@ static size_t measure_ap_header_width(const struct airodump_tui_view * view)
 	return (strlen(line));
 }
 
+#define AIRODUMP_TUI_MIN_MESSAGE_WIDTH 32
+
+static int message_sidebar_fits(size_t ap_width, int cols, int needs_scrollbar)
+{
+	size_t required_width = ap_width + 4 + (needs_scrollbar ? 1 : 0)
+		+ AIRODUMP_TUI_MIN_MESSAGE_WIDTH;
+
+	return (required_width <= (size_t) cols);
+}
+
 static int compute_ap_box_width(size_t ap_width, int cols, int msg_enabled, int needs_scrollbar)
 {
 	int ap_box_width;
@@ -1647,8 +1657,8 @@ static int compute_ap_box_width(size_t ap_width, int cols, int msg_enabled, int 
 	ap_box_width = (int) ap_width + 4;
 	if (needs_scrollbar)
 		ap_box_width++;
-	if (msg_enabled && cols - ap_box_width < 24)
-		ap_box_width = cols - 24;
+	if (msg_enabled && cols - ap_box_width < AIRODUMP_TUI_MIN_MESSAGE_WIDTH)
+		ap_box_width = cols - AIRODUMP_TUI_MIN_MESSAGE_WIDTH;
 	if (ap_box_width < 24)
 		ap_box_width = 24;
 	return (ap_box_width);
@@ -2418,7 +2428,7 @@ void airodump_tui_render(struct airodump_tui_state * state,
 	state->rows = MAX(state->rows, 3);
 	state->cols = MAX(state->cols, 20);
 	content_rows = MAX(1, state->rows - 2);
-	msg_enabled = (view->show_ap && state->cols >= 90);
+	msg_enabled = 0;
 
 	if (view->show_ap)
 	{
@@ -2501,6 +2511,8 @@ void airodump_tui_render(struct airodump_tui_state * state,
 				ap_width = row_width;
 		}
 		ap_has_scrollbar = (ap_count > (size_t) state->ap_visible_rows);
+		msg_enabled = message_sidebar_fits(
+			ap_width, state->cols, ap_has_scrollbar);
 		ap_box_width = compute_ap_box_width(ap_width, state->cols, msg_enabled, ap_has_scrollbar);
 		ap_inner_width = ap_box_width - 2 - (ap_has_scrollbar ? 1 : 0);
 
@@ -2556,6 +2568,7 @@ void airodump_tui_render(struct airodump_tui_state * state,
 	{
 		size_t ap_width = measure_ap_header_width(view);
 
+		msg_enabled = message_sidebar_fits(ap_width, state->cols, 0);
 		ap_box_top = 1;
 		ap_height = MAX(4, ap_height);
 		ap_box_left = 0;
@@ -2574,7 +2587,7 @@ void airodump_tui_render(struct airodump_tui_state * state,
 		strlcpy(title, " Messages", sizeof(title));
 
 		msg_box_width = state->cols - ap_box_width;
-		if (msg_box_width < 24)
+		if (msg_box_width < AIRODUMP_TUI_MIN_MESSAGE_WIDTH)
 		{
 			msg_enabled = 0;
 			msg_box_width = 0;
