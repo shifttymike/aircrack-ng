@@ -595,9 +595,10 @@ static size_t collect_visible_stations(struct ST_info * st_1st,
 		if (time(NULL) - st_cur->tlast <= view->berlin
 			&& (view->selected_ap == NULL || st_cur->base == view->selected_ap)
 			&& (view->station_filter == AIRODUMP_TUI_STATION_FILTER_ALL
-				|| !station_is_locally_administered(st_cur))
-			&& (view->station_filter != AIRODUMP_TUI_STATION_FILTER_ASSOCIATED_NON_LA
-				|| (st_cur->base != NULL
+				|| !station_is_locally_administered(st_cur)
+				|| (view->station_filter
+						== AIRODUMP_TUI_STATION_FILTER_HIDE_UNASSOCIATED_LA
+					&& st_cur->base != NULL
 					&& memcmp(st_cur->base->bssid, BROADCAST, 6) != 0)))
 		{
 			if (count == cap)
@@ -2770,8 +2771,8 @@ void airodump_tui_render(struct airodump_tui_state * state,
 		{
 			strlcpy(header, " Stations (all)", sizeof(header));
 		}
-		if (view->station_filter == AIRODUMP_TUI_STATION_FILTER_ASSOCIATED_NON_LA)
-			strlcat(header, " [associated, non-LA]", sizeof(header));
+		if (view->station_filter == AIRODUMP_TUI_STATION_FILTER_HIDE_UNASSOCIATED_LA)
+			strlcat(header, " [unassociated LA hidden]", sizeof(header));
 		else if (view->station_filter == AIRODUMP_TUI_STATION_FILTER_NON_LA)
 			strlcat(header, " [non-LA]", sizeof(header));
 

@@ -6406,8 +6406,8 @@ static int handle_keycode(int keycode)
 				 station_filter == AIRODUMP_TUI_STATION_FILTER_ALL
 					 ? "all stations"
 					 : station_filter
-							 == AIRODUMP_TUI_STATION_FILTER_ASSOCIATED_NON_LA
-						 ? "associated, non-LA only"
+							 == AIRODUMP_TUI_STATION_FILTER_HIDE_UNASSOCIATED_LA
+						 ? "unassociated LA hidden"
 						 : "non-LA only");
 		redraw = 1;
 	}
