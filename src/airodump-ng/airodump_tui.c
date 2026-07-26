@@ -1684,7 +1684,6 @@ static void render_station_row(int y,
 	char last_seen[32];
 	char notes[16];
 	char probes[256];
-	const char * assoc_label = NULL;
 	const char * la_label = NULL;
 	const char * cell_text;
 	int pair;
@@ -1744,8 +1743,6 @@ static void render_station_row(int y,
 	}
 	band = band_label_from_value(station_band, station_channel);
 
-	if (st->base != NULL && memcmp(st->base->bssid, BROADCAST, 6) == 0)
-		assoc_label = "unassociated";
 	if (station_is_locally_administered(st))
 		la_label = "LA";
 	pair = station_color_pair(st);
@@ -1813,12 +1810,6 @@ static void render_station_row(int y,
 							 station_header_fields[i].width,
 							 station_header_fields[i].right_align,
 							 station_header_fields[i].separator_spaces);
-	}
-
-	if (assoc_label != NULL && used < sizeof(line) - 1)
-	{
-		snprintf(line + used, sizeof(line) - used, " [%s]", assoc_label);
-		used = strlen(line);
 	}
 
 	line[width] = '\0';
