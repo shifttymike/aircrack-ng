@@ -1324,6 +1324,51 @@ static int render_message_row(int y,
 	return (rows_used);
 }
 
+/* Keep scrolling in message entries, but calculate the live-view position in
+ * terminal rows: a single wrapped entry can occupy several display lines. */
+static int message_row_count(const struct airodump_tui_message_entry * entry,
+					 int width)
+{
+	char ts[32];
+	int prefix_len;
+	int rows = 0;
+	const char * cursor;
+
+	if (entry == NULL) return (0);
+	if (width < 1) width = 1;
+	strlcpy(ts, "--:--:--", sizeof(ts));
+	prefix_len = (int) strlen(ts) + 1;
+	if (width <= prefix_len) return (1);
+
+	cursor = entry->text;
+	while (*cursor != '\0')
+	{
+		int available = width - prefix_len;
+		int segment_len = 0;
+		int last_space = -1;
+		const char * segment = cursor;
+
+		while (*segment != '\0' && isspace((unsigned char) *segment)) segment++;
+		if (*segment == '\0') break;
+		while (segment[segment_len] != '\0' && segment_len < available)
+		{
+			if (segment[segment_len] == '\n' || segment[segment_len] == '\r'
+				|| segment[segment_len] == '\t')
+				break;
+			if (segment[segment_len] == ' ') last_space = segment_len;
+			segment_len++;
+		}
+		if (segment[segment_len] != '\0' && last_space > 0 && last_space < segment_len)
+			segment_len = last_space;
+		if (segment_len < 1) segment_len = 1;
+		cursor = segment + segment_len;
+		while (*cursor != '\0' && isspace((unsigned char) *cursor)) cursor++;
+		rows++;
+	}
+
+	return (MAX(1, rows));
+}
+
 static void draw_padded_line(int y, int x, int width, const char * fmt, ...)
 {
 	char buf[1024];
@@ -2555,9 +2600,19 @@ void airodump_tui_render(struct airodump_tui_state * state,
 		else
 		{
 			int max_scroll = 0;
+			int rows_used = 0;
+			size_t start = msg_count;
 
-			if (msg_count > (size_t) state->msg_visible_rows)
-				max_scroll = MAX(0, (int) msg_count - state->msg_visible_rows);
+			/* Find the first entry that fits in the viewport ending at the
+			 * newest message.  Counting entries here hides recent wrapped text. */
+			while (start > 0)
+			{
+				int rows = message_row_count(&view->messages[start - 1], msg_box_width - 2);
+				if (rows_used > 0 && rows_used + rows > state->msg_visible_rows) break;
+				rows_used += rows;
+				start--;
+			}
+			max_scroll = (int) start;
 
 			if (state->msg_follow_latest)
 				state->msg_scroll = max_scroll;
