@@ -2515,6 +2515,7 @@ void airodump_tui_render(struct airodump_tui_state * state,
 		ap_has_scrollbar = (ap_count > (size_t) state->ap_visible_rows);
 		msg_enabled = message_sidebar_fits(
 			ap_width, state->cols, ap_has_scrollbar);
+		if (!msg_enabled && state->focus == 2) state->focus = 0;
 		ap_box_width = compute_ap_box_width(ap_width, state->cols, msg_enabled, ap_has_scrollbar);
 		ap_inner_width = ap_box_width - 2 - (ap_has_scrollbar ? 1 : 0);
 
@@ -2571,6 +2572,7 @@ void airodump_tui_render(struct airodump_tui_state * state,
 		size_t ap_width = measure_ap_header_width(view);
 
 		msg_enabled = message_sidebar_fits(ap_width, state->cols, 0);
+		if (!msg_enabled && state->focus == 2) state->focus = 0;
 		ap_box_top = 1;
 		ap_height = MAX(4, ap_height);
 		ap_box_left = 0;

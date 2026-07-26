@@ -5365,7 +5365,8 @@ static void set_message_follow_latest(int follow_latest)
 
 static int tui_message_pane_visible(void)
 {
-	return (use_ncurses_tui && lopt.show_ap && tui_state.cols >= 90);
+	return (use_ncurses_tui && lopt.show_ap && tui_state.msg_box_width > 0
+			&& tui_state.msg_box_height > 0);
 }
 
 static void cycle_tui_focus(int direction)
@@ -5401,7 +5402,6 @@ static void set_tui_focus(int focus)
 	{
 		if (focus < 0) focus = 0;
 		if (focus > 2) focus = 2;
-		if (focus == 2 && !tui_message_pane_visible()) focus = 0;
 	}
 	else if (lopt.show_ap == 1 && lopt.show_sta == 1)
 	{
