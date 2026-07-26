@@ -1,0 +1,72 @@
+name: Binary release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to create (for example, v1.7.0-tui.1)
+        required: true
+        type: string
+      prerelease:
+        description: Mark the GitHub release as a prerelease
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Linux x86_64
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y autoconf automake build-essential ethtool \
+            libnl-3-dev libnl-genl-3-dev libpcap-dev libpcre2-dev \
+            libsqlite3-dev libssl-dev libtool pkg-config zlib1g-dev
+
+      - name: Configure and build
+        run: |
+          autoreconf -fi
+          ./configure --without-opt --with-experimental
+          make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)"
+
+      - name: Package installed files
+        shell: bash
+        run: |
+          mkdir -p stage
+          make DESTDIR="$PWD/stage" install
+          tar -C stage/usr/local -czf aircrack-ng-linux-x86_64.tar.gz .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aircrack-ng-linux-x86_64
+          path: aircrack-ng-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          prerelease: ${{ inputs.prerelease || false }}
+          files: release-assets/*.tar.gz
