@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   build:
-    name: Linux x86_64
+    name: airodump-ng Linux x86_64
     runs-on: ubuntu-22.04
 
     steps:
@@ -43,12 +43,12 @@ jobs:
       - name: Package airodump-ng
         shell: bash
         run: |
-          tar -C .libs -czf aircrack-ng-linux-x86_64.tar.gz airodump-ng
+          tar -C .libs -czf airodump-ng-linux-x86_64.tar.gz airodump-ng
 
       - uses: actions/upload-artifact@v4
         with:
-          name: aircrack-ng-linux-x86_64
-          path: aircrack-ng-linux-x86_64.tar.gz
+          name: airodump-ng-linux-x86_64
+          path: airodump-ng-linux-x86_64.tar.gz
           if-no-files-found: error
 
   release:
