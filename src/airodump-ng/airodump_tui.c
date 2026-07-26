@@ -2076,7 +2076,7 @@ static void render_status_line(const struct airodump_tui_state * state,
 
 	snprintf(line,
 			 sizeof(line),
-	"?:help | v:channels | b/B:band | l/r:lock/resume | d:deauth | s/S:sort | i:order | Tab/Left/Right:focus | Arrows/PgUp/PgDn/Home/End:scroll | q:quit");
+	"?:help | m:messages | v:channels | b/B:band | l/r:lock/resume | d:deauth | s/S:sort | i:order | Tab/Left/Right:focus | Arrows/PgUp/PgDn/Home/End:scroll | q:quit");
 
 	if (COLS < 1) return;
 	width = MIN(COLS - 1, (int) sizeof(line) - 1);
@@ -2102,6 +2102,7 @@ static void render_help_overlay(void)
 		"i: invert sort order",
 		"g: set regulatory domain",
 		"v: view channel availability",
+		"m: view message history",
 		"t: tune channel",
 		"w: write WPA snapshot",
 		"c: clear AP filter",
@@ -2252,6 +2253,72 @@ static void render_channel_overlay(const struct airodump_tui_state * state,
 			attroff(COLOR_PAIR(2));
 		}
 	}
+}
+
+static void render_messages_overlay(struct airodump_tui_state * state,
+							const struct airodump_tui_view * view)
+{
+	int box_width = COLS - 4;
+	int box_height = LINES - 4;
+	int inner_width;
+	int visible_rows;
+	int total_rows = 0;
+	int rows_used = 0;
+	int scroll_rows = 0;
+	size_t start;
+	size_t i;
+
+	if (state == NULL || view == NULL || box_width < 24 || box_height < 6) return;
+	inner_width = box_width - 4;
+	visible_rows = box_height - 4;
+	state->msg_visible_rows = visible_rows;
+
+	for (i = 0; i < view->message_count; i++)
+		total_rows += message_row_count(&view->messages[i], inner_width);
+
+	start = view->message_count;
+	while (start > 0)
+	{
+		int rows = message_row_count(&view->messages[start - 1], inner_width);
+		if (rows_used > 0 && rows_used + rows > visible_rows) break;
+		rows_used += rows;
+		start--;
+	}
+	if (state->msg_follow_latest)
+		state->msg_scroll = (int) start;
+	if (state->msg_scroll < 0) state->msg_scroll = 0;
+	if ((size_t) state->msg_scroll > start) state->msg_scroll = (int) start;
+
+	for (i = 0; i < (size_t) state->msg_scroll; i++)
+		scroll_rows += message_row_count(&view->messages[i], inner_width);
+
+	attron(A_REVERSE);
+	for (i = 0; i < (size_t) box_height; i++)
+		mvhline(2 + (int) i, 2, ' ', box_width);
+	attroff(A_REVERSE);
+	render_ascii_box(2, 2, box_height, box_width, " Messages ");
+	mvaddnstr(3, 4, "m/Esc: close | Arrows/PgUp/PgDn/Home/End: scroll", inner_width);
+
+	{
+		int y = 4;
+		int rows_left = visible_rows;
+		for (i = (size_t) state->msg_scroll;
+			 i < view->message_count && rows_left > 0;
+			 i++)
+		{
+			int used = render_message_row(y, 4, inner_width, rows_left, state,
+								  &view->messages[i]);
+			y += used;
+			rows_left -= used;
+		}
+	}
+	draw_scrollbar(4,
+				   visible_rows,
+				   total_rows,
+				   scroll_rows,
+				   visible_rows,
+				   2 + box_width - 2,
+				   1);
 }
 
 static void ensure_colors(struct airodump_tui_state * state)
@@ -2758,6 +2825,8 @@ void airodump_tui_render(struct airodump_tui_state * state,
 		render_help_overlay();
 	if (state->channel_overlay_visible)
 		render_channel_overlay(state, view);
+	if (state->messages_overlay_visible)
+		render_messages_overlay(state, view);
 	wnoutrefresh(stdscr);
 	doupdate();
 

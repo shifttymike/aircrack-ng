@@ -6231,10 +6231,23 @@ static int handle_keycode(int keycode)
 		goto done;
 	}
 
+	if (tui_state.messages_overlay_visible)
+	{
+		if (keycode == 'm' || keycode == 27 || keycode == KEY_ESCAPE)
+		{
+			tui_state.messages_overlay_visible = 0;
+			set_tui_focus(0);
+			redraw = 1;
+			goto done;
+		}
+		goto done;
+	}
+
 	if (keycode == '?' || keycode == KEY_F(1))
 	{
 		tui_state.help_visible = !tui_state.help_visible;
 		tui_state.channel_overlay_visible = 0;
+		tui_state.messages_overlay_visible = 0;
 		redraw = 1;
 		goto done;
 	}
@@ -6243,6 +6256,18 @@ static int handle_keycode(int keycode)
 	{
 		tui_state.channel_overlay_visible = !tui_state.channel_overlay_visible;
 		tui_state.help_visible = 0;
+		tui_state.messages_overlay_visible = 0;
+		redraw = 1;
+		goto done;
+	}
+
+	if (keycode == 'm')
+	{
+		tui_state.messages_overlay_visible = 1;
+		tui_state.help_visible = 0;
+		tui_state.channel_overlay_visible = 0;
+		set_tui_focus(2);
+		set_message_follow_latest(1);
 		redraw = 1;
 		goto done;
 	}

@@ -51,6 +51,7 @@ struct airodump_tui_state
 	int mouse_enabled;
 	int help_visible;
 	int channel_overlay_visible;
+	int messages_overlay_visible;
 	int sta_sort_by;
 	int sta_sort_inv;
 	int ap_visible_rows;
