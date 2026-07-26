@@ -1589,19 +1589,21 @@ int dump_write_kismet_csv(struct AP_info * ap_1st,
 
 int dump_write_wpa_snapshot(const char * filename,
 							struct ST_info * st_1st,
-							size_t * records_written)
+							struct dump_wpa_snapshot_stats * stats)
 {
 	FILE * fp;
 	struct ivs2_filehdr fivs2;
 	struct ivs2_pkthdr ivs2;
 	struct ST_info * st_cur;
-	uint8_t zero_pmkid[sizeof(st_cur->wpa.pmkid)];
+	struct AP_info ** written_aps = NULL;
+	size_t written_ap_count = 0;
+	size_t written_ap_capacity = 0;
 	size_t records = 0;
+	uint8_t zero_pmkid[sizeof(st_cur->wpa.pmkid)];
 
 	if (filename == NULL || filename[0] == '\0' || st_1st == NULL)
 		return (0);
-
-	if (records_written != NULL) *records_written = 0;
+	if (stats != NULL) memset(stats, 0, sizeof(*stats));
 
 	fp = fopen(filename, "wb+");
 	if (fp == NULL)
@@ -1612,69 +1614,101 @@ int dump_write_wpa_snapshot(const char * filename,
 
 	memset(&fivs2, '\x00', sizeof(fivs2));
 	fivs2.version = IVS2_VERSION;
-
-	if (fwrite(IVS2_MAGIC, 1, 4, fp) != (size_t) 4)
-	{
-		perror("fwrite(IVS magic) failed");
-		fclose(fp);
-		return (1);
-	}
-
-	if (fwrite(&fivs2, 1, sizeof(fivs2), fp) != (size_t) sizeof(fivs2))
+	if (fwrite(IVS2_MAGIC, 1, 4, fp) != 4
+		|| fwrite(&fivs2, 1, sizeof(fivs2), fp) != sizeof(fivs2))
 	{
 		perror("fwrite(IVS header) failed");
 		fclose(fp);
 		return (1);
 	}
-
 	memset(zero_pmkid, 0, sizeof(zero_pmkid));
 
 	for (st_cur = st_1st; st_cur != NULL; st_cur = st_cur->next)
 	{
+		struct WPA_hdsk snapshot;
+		int has_handshake;
+		int has_pmkid;
+		int ap_already_written = 0;
+		size_t i;
+
 		if (st_cur->base == NULL) continue;
-		if (st_cur->wpa.state != 7
-			&& memcmp(st_cur->wpa.pmkid, zero_pmkid, sizeof(zero_pmkid)) == 0)
-			continue;
+		has_handshake = (st_cur->wpa.state == 7 && st_cur->wpa.eapol_size > 0
+						 && st_cur->wpa.eapol_size <= sizeof(st_cur->wpa.eapol));
+		has_pmkid = (st_cur->wpa.state > 0
+					 && memcmp(st_cur->wpa.pmkid, zero_pmkid, sizeof(zero_pmkid)) != 0);
+		if (!has_handshake && !has_pmkid) continue;
+
+		for (i = 0; i < written_ap_count; i++)
+			if (written_aps[i] == st_cur->base) ap_already_written = 1;
+		if (!ap_already_written)
+		{
+			if (written_ap_count == written_ap_capacity)
+			{
+				size_t capacity = written_ap_capacity == 0 ? 16 : written_ap_capacity * 2;
+				struct AP_info ** resized = realloc(written_aps, capacity * sizeof(*written_aps));
+				if (resized == NULL)
+				{
+					perror("realloc failed");
+					goto write_failed;
+				}
+				written_aps = resized;
+				written_ap_capacity = capacity;
+			}
+			written_aps[written_ap_count++] = st_cur->base;
+
+			if (st_cur->base->ssid_length > 0
+				&& st_cur->base->ssid_length <= ESSID_LENGTH
+				&& st_cur->base->essid[0] != '\0')
+			{
+				memset(&ivs2, '\x00', sizeof(ivs2));
+				ivs2.flags = IVS2_ESSID | IVS2_BSSID;
+				ivs2.len = (uint16_t) (6 + st_cur->base->ssid_length);
+				if (fwrite(&ivs2, 1, sizeof(ivs2), fp) != sizeof(ivs2)
+					|| fwrite(st_cur->base->bssid, 1, 6, fp) != 6
+					|| fwrite(st_cur->base->essid, 1, st_cur->base->ssid_length, fp)
+						!= (size_t) st_cur->base->ssid_length)
+				{
+					perror("fwrite(IVS ESSID record) failed");
+					goto write_failed;
+				}
+			}
+			else if (stats != NULL)
+			{
+				stats->missing_essid_aps++;
+			}
+		}
 
 		memset(&ivs2, '\x00', sizeof(ivs2));
 		ivs2.flags = IVS2_WPA | IVS2_BSSID;
-		ivs2.len = (uint16_t) (sizeof(struct WPA_hdsk) + 6);
-
-		if (fwrite(&ivs2, 1, sizeof(ivs2), fp) != (size_t) sizeof(ivs2))
+		ivs2.len = (uint16_t) (sizeof(snapshot) + 6);
+		memcpy(&snapshot, &st_cur->wpa, sizeof(snapshot));
+		memcpy(snapshot.stmac, st_cur->stmac, sizeof(snapshot.stmac));
+		if (fwrite(&ivs2, 1, sizeof(ivs2), fp) != sizeof(ivs2)
+			|| fwrite(st_cur->base->bssid, 1, 6, fp) != 6
+			|| fwrite(&snapshot, 1, sizeof(snapshot), fp) != sizeof(snapshot))
 		{
-			perror("fwrite(IVS WPA header) failed");
-			fclose(fp);
-			return (1);
+			perror("fwrite(IVS WPA record) failed");
+			goto write_failed;
 		}
-
-		if (fwrite(st_cur->base->bssid, 1, 6, fp) != (size_t) 6)
+		if (stats != NULL)
 		{
-			perror("fwrite(IVS WPA bssid) failed");
-			fclose(fp);
-			return (1);
+			if (has_handshake)
+				stats->handshake_records++;
+			else
+				stats->pmkid_only_records++;
 		}
-
-		if (fwrite(&(st_cur->wpa),
-				   1,
-				   sizeof(struct WPA_hdsk),
-				   fp)
-			!= (size_t) sizeof(struct WPA_hdsk))
-		{
-			perror("fwrite(IVS WPA payload) failed");
-			fclose(fp);
-			return (1);
-		}
-
 		records++;
 	}
 
 	fflush(fp);
 	fclose(fp);
-
-	if (records_written != NULL) *records_written = records;
-
+	free(written_aps);
 	if (records == 0)
 		unlink(filename);
-
 	return (0);
+
+write_failed:
+	free(written_aps);
+	fclose(fp);
+	return (1);
 }

@@ -54,8 +54,15 @@ int dump_write_kismet_netxml(struct AP_info * ap_1st,
 int dump_write_kismet_csv(struct AP_info * ap_1st,
 						  struct ST_info * st_1st,
 						  unsigned int f_encrypt);
+struct dump_wpa_snapshot_stats
+{
+	size_t handshake_records;
+	size_t pmkid_only_records;
+	size_t missing_essid_aps;
+};
+
 int dump_write_wpa_snapshot(const char * filename,
 							struct ST_info * st_1st,
-							size_t * records_written);
+							struct dump_wpa_snapshot_stats * stats);
 
 #endif /* _AIRODUMP_NG_DUMP_WRITE_H_ */

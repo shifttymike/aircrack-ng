@@ -9034,7 +9034,7 @@ static int write_wpa_snapshot(void)
 	char filename[128];
 	struct tm * lt;
 	time_t now;
-	size_t records = 0;
+	struct dump_wpa_snapshot_stats stats = { 0 };
 
 	now = time(NULL);
 	lt = localtime(&now);
@@ -9056,7 +9056,7 @@ static int write_wpa_snapshot(void)
 			 lt->tm_min,
 			 lt->tm_sec);
 
-	if (dump_write_wpa_snapshot(filename, lopt.st_1st, &records) != 0)
+	if (dump_write_wpa_snapshot(filename, lopt.st_1st, &stats) != 0)
 	{
 		snprintf(lopt.message,
 				 sizeof(lopt.message),
@@ -9065,7 +9065,7 @@ static int write_wpa_snapshot(void)
 		return (0);
 	}
 
-	if (records == 0)
+	if (stats.handshake_records + stats.pmkid_only_records == 0)
 	{
 		snprintf(lopt.message,
 				 sizeof(lopt.message),
@@ -9076,10 +9076,13 @@ static int write_wpa_snapshot(void)
 
 	snprintf(lopt.message,
 			 sizeof(lopt.message),
-			 "][ wrote %zu WPA record%s to %s",
-			 records,
-			 records == 1 ? "" : "s",
-			 filename);
+			 "][ wrote %zu handshake%s and %zu PMKID%s to %s%s",
+			 stats.handshake_records,
+			 stats.handshake_records == 1 ? "" : "s",
+			 stats.pmkid_only_records,
+			 stats.pmkid_only_records == 1 ? "" : "s",
+			 filename,
+			 stats.missing_essid_aps == 0 ? "" : " (SSID missing for one or more APs)");
 	append_tui_message_history_now(lopt.message);
 	return (1);
 }
