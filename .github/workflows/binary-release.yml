@@ -43,7 +43,7 @@ jobs:
       - name: Package airodump-ng
         shell: bash
         run: |
-          tar -czf aircrack-ng-linux-x86_64.tar.gz airodump-ng
+          tar -C .libs -czf aircrack-ng-linux-x86_64.tar.gz airodump-ng
 
       - uses: actions/upload-artifact@v4
         with:
