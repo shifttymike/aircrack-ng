@@ -651,6 +651,7 @@ static size_t channel_entry_len = 0;
 static char cached_regdom[16];
 static struct wif ** g_wi = NULL;
 static int use_ncurses_tui = 0;
+static int hide_la_stations = 0;
 static volatile sig_atomic_t tui_resize_pending = 0;
 static struct airodump_tui_state tui_state;
 #define BAND_MODE_BG 0
@@ -5304,6 +5305,7 @@ static void render_output_view(int record_message_history)
 		view.show_ap = lopt.show_ap;
 		view.show_sta = lopt.show_sta;
 		view.show_ack = lopt.show_ack;
+		view.hide_la_stations = hide_la_stations;
 		view.singlechan = lopt.singlechan;
 		view.show_uptime = lopt.show_uptime;
 		view.show_manufacturer = lopt.show_manufacturer;
@@ -6383,6 +6385,17 @@ static int handle_keycode(int keycode)
 				 sizeof(lopt.message),
 				 "][ mouse capture %s",
 				 tui_state.mouse_enabled ? "enabled" : "disabled");
+		redraw = 1;
+	}
+
+	if (keycode == 'L')
+	{
+		hide_la_stations = !hide_la_stations;
+		tui_state.sta_scroll = 0;
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ locally administered stations %s",
+				 hide_la_stations ? "hidden" : "shown");
 		redraw = 1;
 	}
 

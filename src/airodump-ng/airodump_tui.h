@@ -101,6 +101,7 @@ struct airodump_tui_view
 	int show_ap;
 	int show_sta;
 	int show_ack;
+	int hide_la_stations;
 	int singlechan;
 	int show_uptime;
 	int show_manufacturer;
