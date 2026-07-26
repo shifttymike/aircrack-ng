@@ -36,6 +36,13 @@ enum airodump_tui_message_style
 	AIRODUMP_TUI_MESSAGE_STYLE_SUCCESS = 2
 };
 
+enum airodump_tui_station_filter
+{
+	AIRODUMP_TUI_STATION_FILTER_ALL = 0,
+	AIRODUMP_TUI_STATION_FILTER_ASSOCIATED_NON_LA,
+	AIRODUMP_TUI_STATION_FILTER_NON_LA,
+};
+
 struct airodump_tui_state
 {
 	int active;
@@ -101,7 +108,7 @@ struct airodump_tui_view
 	int show_ap;
 	int show_sta;
 	int show_ack;
-	int hide_la_stations;
+	enum airodump_tui_station_filter station_filter;
 	int singlechan;
 	int show_uptime;
 	int show_manufacturer;

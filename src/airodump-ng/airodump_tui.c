@@ -594,8 +594,11 @@ static size_t collect_visible_stations(struct ST_info * st_1st,
 	{
 		if (time(NULL) - st_cur->tlast <= view->berlin
 			&& (view->selected_ap == NULL || st_cur->base == view->selected_ap)
-			&& (!view->hide_la_stations
-				|| !station_is_locally_administered(st_cur)))
+			&& (view->station_filter == AIRODUMP_TUI_STATION_FILTER_ALL
+				|| !station_is_locally_administered(st_cur))
+			&& (view->station_filter != AIRODUMP_TUI_STATION_FILTER_ASSOCIATED_NON_LA
+				|| (st_cur->base != NULL
+					&& memcmp(st_cur->base->bssid, BROADCAST, 6) != 0)))
 		{
 			if (count == cap)
 			{
@@ -2078,7 +2081,7 @@ static void render_status_line(const struct airodump_tui_state * state,
 
 	snprintf(line,
 			 sizeof(line),
-	"?:help | m:messages | L:hide LA | v:channels | b/B:band | l/r:lock/resume | d:deauth | s/S:sort | i:order | Tab/Left/Right:focus | Arrows/PgUp/PgDn/Home/End:scroll | q:quit");
+	"?:help | m:messages | L:station filter | v:channels | b/B:band | l/r:lock/resume | d:deauth | s/S:sort | i:order | Tab/Left/Right:focus | Arrows/PgUp/PgDn/Home/End:scroll | q:quit");
 
 	if (COLS < 1) return;
 	width = MIN(COLS - 1, (int) sizeof(line) - 1);
@@ -2105,7 +2108,7 @@ static void render_help_overlay(void)
 		"g: set regulatory domain",
 		"v: view channel availability",
 		"m: view message history",
-		"L: toggle locally administered stations",
+		"L: cycle station privacy filter",
 		"t: tune channel",
 		"w: write WPA snapshot",
 		"c: clear AP filter",
@@ -2767,8 +2770,10 @@ void airodump_tui_render(struct airodump_tui_state * state,
 		{
 			strlcpy(header, " Stations (all)", sizeof(header));
 		}
-		if (view->hide_la_stations)
-			strlcat(header, " [LA hidden]", sizeof(header));
+		if (view->station_filter == AIRODUMP_TUI_STATION_FILTER_ASSOCIATED_NON_LA)
+			strlcat(header, " [associated, non-LA]", sizeof(header));
+		else if (view->station_filter == AIRODUMP_TUI_STATION_FILTER_NON_LA)
+			strlcat(header, " [non-LA]", sizeof(header));
 
 		sta_box_top = view->show_ap ? (ap_height + 1) : 1;
 		body_top = sta_box_top + 1;
