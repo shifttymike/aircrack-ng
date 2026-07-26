@@ -1652,6 +1652,8 @@ static int compute_ap_box_width(size_t ap_width, int cols, int msg_enabled, int 
 {
 	int ap_box_width;
 
+	if (!msg_enabled) return (cols);
+
 	if (ap_width + 4 > (size_t) cols)
 		ap_width = (cols > 4) ? (size_t) cols - 4 : 1;
 	ap_box_width = (int) ap_width + 4;
