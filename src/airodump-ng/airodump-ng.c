@@ -3322,14 +3322,18 @@ skip_probe:
 
 				if (type == 0x30)
 				{
-					const unsigned char * rsn_cap = p + 2 + 4 * numauth;
+					const unsigned char * rsn_cap = p + 4 * numauth;
 
 					if (rsn_cap + 2 <= h80211 + caplen)
 					{
+						int old_mfp_capable = ap_cur->mfp_capable;
+						int old_mfp_required = ap_cur->mfp_required;
 						unsigned short rsn_caps
 							= (unsigned short) (rsn_cap[0]
 												| ((unsigned short) rsn_cap[1] << 8));
 
+						ap_cur->mfp_capable = 0;
+						ap_cur->mfp_required = 0;
 						if (rsn_caps & 0x0080)
 							ap_cur->mfp_capable = 1;
 						if (rsn_caps & 0x0040)
@@ -3337,6 +3341,9 @@ skip_probe:
 							ap_cur->mfp_capable = 1;
 							ap_cur->mfp_required = 1;
 						}
+						if (old_mfp_capable != ap_cur->mfp_capable
+							|| old_mfp_required != ap_cur->mfp_required)
+							ap_cur->mfp_warned = 0;
 					}
 				}
 
@@ -5811,7 +5818,7 @@ static int deauth_mfp_guard(struct AP_info * ap_cur)
 {
 	if (ap_cur == NULL) return (0);
 
-	if (ap_cur->mfp_required || (ap_cur->security & AUTH_SAE))
+	if (ap_cur->mfp_required)
 	{
 		ap_cur->mfp_warned = 1;
 		snprintf(lopt.message,
@@ -6461,7 +6468,6 @@ static int handle_keycode(int keycode)
 		{
 			if (lopt.p_selected_ap != NULL
 				&& (lopt.p_selected_ap->mfp_required
-					|| (lopt.p_selected_ap->security & AUTH_SAE)
 					|| (lopt.p_selected_ap->mfp_capable
 						&& !lopt.p_selected_ap->mfp_warned)))
 			{
