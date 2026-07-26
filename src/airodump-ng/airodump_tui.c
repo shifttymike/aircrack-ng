@@ -2601,7 +2601,14 @@ void airodump_tui_render(struct airodump_tui_state * state,
 		{
 			int max_scroll = 0;
 			int rows_used = 0;
+			int total_rows = 0;
+			int scroll_rows;
 			size_t start = msg_count;
+			size_t message_index;
+
+			for (message_index = 0; message_index < msg_count; message_index++)
+				total_rows += message_row_count(
+				&view->messages[message_index], msg_box_width - 2);
 
 			/* Find the first entry that fits in the viewport ending at the
 			 * newest message.  Counting entries here hides recent wrapped text. */
@@ -2616,15 +2623,15 @@ void airodump_tui_render(struct airodump_tui_state * state,
 
 			if (state->msg_follow_latest)
 				state->msg_scroll = max_scroll;
-			if ((size_t) state->msg_scroll > msg_count - 1)
-				state->msg_scroll = (int) (msg_count - 1);
 			if (state->msg_scroll < 0) state->msg_scroll = 0;
-			if (msg_count <= (size_t) state->msg_visible_rows)
-				state->msg_scroll = 0;
-			else if ((size_t) state->msg_scroll > msg_count - state->msg_visible_rows)
+			if (state->msg_scroll > max_scroll)
 				state->msg_scroll = max_scroll;
 
 			msg_start = (size_t) state->msg_scroll;
+			scroll_rows = 0;
+			for (message_index = 0; message_index < msg_start; message_index++)
+				scroll_rows += message_row_count(
+					&view->messages[message_index], msg_box_width - 2);
 			{
 					int msg_y = msg_box_top + 1;
 					int rows_left = state->msg_visible_rows;
@@ -2647,8 +2654,8 @@ void airodump_tui_render(struct airodump_tui_state * state,
 				}
 				draw_scrollbar(msg_box_top + 1,
 						   state->msg_visible_rows,
-						   (int) msg_count,
-						   state->msg_scroll,
+						   total_rows,
+						   scroll_rows,
 						   state->msg_visible_rows,
 						   msg_box_left + msg_box_width - 2,
 						   state->focus == 2);
