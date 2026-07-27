@@ -133,6 +133,43 @@ Filter APs by ESSID using a regular expression.
 .PP
 .BI airodump-ng
 can receive and interpret key strokes while running. The following list describes the currently assigned keys and supposed actions:
+.PP
+When the ncurses TUI is active, the following keys describe the current
+interface (and supersede older single-pane bindings below):
+.TP
+.I w
+Write a timestamped WPA snapshot (a .wpa IVS2-compatible file) and a matching
+Hashcat 22000 export. For an authorized test capture, use, for example:
+.br
+.B aircrack-ng -w candidates.txt wpa-handshakes-MMDD-HHMMSS.wpa
+.br
+.B hashcat -m 22000 -a 0 wpa-handshakes-MMDD-HHMMSS.22000 candidates.txt
+.TP
+.I C
+Clear all in-memory AP and station history. Capture continues and newly
+observed traffic repopulates the lists.
+.TP
+.I m
+Open or close the message-history overlay.
+.TP
+.I b / B
+Switch the active band forward/backward. The TUI supports 2.4, 5, and 6 GHz
+where the capture adapter and regulatory domain permit them.
+.TP
+.I t / l / r
+Tune to a channel; lock to the selected AP channel; resume channel hopping.
+.TP
+.I L / V
+Cycle the locally-administered station privacy filter; toggle OUI vendor labels.
+.TP
+.I ? / F1
+Open or close TUI help.
+.PP
+The AP Mbit field is the advertised maximum PHY rate, not current throughput.
+It is calculated from HT/VHT/HE/EHT MCS, spatial-stream, and operating-width
+information for 802.11n, 802.11ac, 802.11ax (Wi-Fi 6/6E), and 802.11be
+(Wi-Fi 7). HE/EHT figures assume a full-bandwidth SU transmission with a
+0.8 microsecond guard interval.
 .TP
 .I a
 Select active areas by cycling through these display options: AP+STA; AP+STA+ACK; AP only; STA only

@@ -8,14 +8,40 @@ This document summarizes the behavior changes made in this workspace.
 - `r`: resume channel hopping after parking on a selected AP channel.
 - `b` / `B`: switch the active band next / previous.
 - `v`: show active-band channel availability, with unavailable or driver-refused targets highlighted red.
-- `w`: write the buffered WPA/PMKID records to an IVS2 snapshot file.
+- `w`: write the buffered WPA material to both a `.wpa` snapshot and a Hashcat `22000` export.
 - `t`: tune all capture interfaces to a channel and stop hopping.
 - `l`: lock all capture interfaces to the selected AP's channel.
 - `s` / `S`: cycle the sort field in the active pane next / previous.
 - `R`: toggle realtime sorting.
 - `M`: toggle mouse capture.
 - `c`: clear the selected AP filter.
+- `C`: clear all in-memory AP and station history. Capture continues and newly observed traffic repopulates the panes.
+- `L`: cycle the station privacy filter: all stations; hide locally administered unassociated stations; non-locally-administered stations only.
+- `m`: open or close the message-history overlay.
+- `V`: toggle OUI vendor labels for globally administered MAC addresses.
 - `?` / `F1`: show or close the TUI help overlay.
+
+## WPA snapshot and cracking workflow
+
+Press `w` after observing WPA material. It writes two timestamped files in the
+current directory:
+
+- `wpa-handshakes-MMDD-HHMMSS.wpa`: a WPA-only IVS2-compatible snapshot for
+  `aircrack-ng`.
+- `wpa-handshakes-MMDD-HHMMSS.22000`: directly importable Hashcat records for
+  EAPOL handshakes and PMKIDs that are sufficiently complete to export.
+
+Examples, using an authorized test network and a candidate list:
+
+```sh
+aircrack-ng -w candidates.txt wpa-handshakes-0727-153045.wpa
+hashcat -m 22000 -a 0 wpa-handshakes-0727-153045.22000 candidates.txt
+```
+
+The `.wpa` extension describes the snapshot's purpose; its on-disk container
+is IVS2. A snapshot may contain WPA observations that cannot be exported as a
+Hashcat record. Check the TUI message after writing: it reports the number of
+EAPOL and PMKID records exported.
 
 ## Header
 
@@ -25,7 +51,7 @@ This document summarizes the behavior changes made in this workspace.
 - The header shows the active interface's actual kernel-reported regulatory domain from `iw reg get`, not the last requested value.
 - Hopper warnings are surfaced when the driver refuses a channel or frequency, including the refused target, total rejected count, and current regdom.
 - `v` opens a channel availability overlay for the active band; white entries are usable by the hopper, red entries are unavailable from the driver/regdom list or were refused during this run.
-- `w` writes the currently buffered WPA/PMKID material to an IVS2 file for later cracking.
+- `w` writes the currently buffered WPA material as both a `.wpa` IVS2 snapshot and a `.22000` Hashcat export.
 - WPA3 transition APs are labeled `WPA2/3` in the security column, and the auth column shows `PSK+SAE` instead of looking identical to pure WPA3.
 
 ## `deauth` launch flow
@@ -65,6 +91,23 @@ This document summarizes the behavior changes made in this workspace.
 - The AP table headers were realigned with the data columns.
 - The AP and station tables include a `Band` column so historical rows remain clear after band changes.
 - The station table includes an `LA` column for locally administered station MAC addresses.
+
+## PHY rate reporting
+
+- The AP `Mbit` field is the advertised maximum PHY rate, not the current
+  negotiated client rate or measured throughput.
+- 802.11n and 802.11ac rates are derived from their advertised MCS/NSS and
+  channel-width information. VHT short-GI capability is parsed from the
+  correct VHT Capability byte.
+- 802.11ax (HE / Wi-Fi 6 and 6E) rates use the HE MCS/NSS set and the
+  operating width. 802.11be (EHT / Wi-Fi 7) rates use EHT capability and
+  operation information, including 320 MHz operation where advertised.
+- HE and EHT maximums assume a full-bandwidth SU transmission with 0.8 µs
+  guard interval. They are an advertised ceiling; RF conditions and client
+  capability determine the actual link rate.
+- When a BSSID is only seen in station or non-beacon management traffic, its
+  channel and band are inferred from the capture metadata until a beacon or
+  probe response provides the AP's advertised channel.
 
 ## Sorting
 
