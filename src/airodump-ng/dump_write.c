@@ -1628,6 +1628,7 @@ int dump_write_wpa_snapshot(const char * filename,
 		struct WPA_hdsk snapshot;
 		int has_handshake;
 		int has_pmkid;
+		int has_full_handshake;
 		int ap_already_written = 0;
 		size_t i;
 
@@ -1636,6 +1637,9 @@ int dump_write_wpa_snapshot(const char * filename,
 						 && st_cur->wpa.eapol_size <= sizeof(st_cur->wpa.eapol));
 		has_pmkid = (st_cur->wpa.state > 0
 					 && memcmp(st_cur->wpa.pmkid, zero_pmkid, sizeof(zero_pmkid)) != 0);
+		has_full_handshake = ((st_cur->wpa.found & ((1 << 1) | (1 << 2)
+															 | (1 << 3) | (1 << 4)))
+						  == ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4)));
 		if (!has_handshake && !has_pmkid) continue;
 
 		for (i = 0; i < written_ap_count; i++)
@@ -1693,9 +1697,15 @@ int dump_write_wpa_snapshot(const char * filename,
 		if (stats != NULL)
 		{
 			if (has_handshake)
+			{
 				stats->handshake_records++;
-			else
-				stats->pmkid_only_records++;
+				if (has_full_handshake) stats->full_handshake_records++;
+			}
+			if (has_pmkid)
+			{
+				stats->pmkid_records++;
+				if (!has_handshake) stats->pmkid_only_records++;
+			}
 		}
 		records++;
 	}

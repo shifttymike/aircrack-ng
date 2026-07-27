@@ -948,8 +948,9 @@ static enum airodump_tui_message_style message_style_from_text(const char * mess
 		return (AIRODUMP_TUI_MESSAGE_STYLE_WARNING);
 	}
 
-	if (strstr(message, "PMKID found:") != NULL
-		|| strstr(message, "WPA handshake:") != NULL)
+	if (strstr(message, "PMKID captured in M1:") != NULL
+		|| strstr(message, "EAPOL M1+M2 captured") != NULL
+		|| strstr(message, "EAPOL 4-way complete") != NULL)
 	{
 		return (AIRODUMP_TUI_MESSAGE_STYLE_SUCCESS);
 	}
@@ -3180,6 +3181,7 @@ skip_probe:
 					ap_cur->max_speed = (int) max_rate;
 				}
 			}
+
 		}
 	}
 
@@ -3808,24 +3810,32 @@ skip_probe:
 				memcpy(st_cur->wpa.anonce, &h80211[z + 17], 32);
 
 				st_cur->wpa.state = 1;
+				st_cur->wpa.found |= 1 << 1;
 
-				if (h80211[z + 99] == IEEE80211_ELEMID_VENDOR)
+				if (z + 99 <= (unsigned) caplen)
 				{
 					const uint8_t rsn_oui[] = {RSN_OUI & 0xff,
 											   (RSN_OUI >> 8) & 0xff,
 											   (RSN_OUI >> 16) & 0xff};
+					const uint8_t * key_data = &h80211[z + 99];
+					const uint8_t * key_data_end;
+					uint16_t key_data_len
+						= (uint16_t) ((h80211[z + 97] << 8) + h80211[z + 98]);
 
-					if (memcmp(rsn_oui, &h80211[z + 101], 3) == 0
-						&& h80211[z + 104] == RSN_CSE_CCMP)
+					if (key_data_len > (unsigned) caplen - z - 99)
+						goto write_packet;
+					key_data_end = key_data + key_data_len;
+					while (key_data + 2 <= key_data_end)
 					{
-						if (memcmp(ZERO, &h80211[z + 105], 16) != 0) //-V512
+						if (key_data + 2 + key_data[1] > key_data_end) break;
+						if (key_data[0] == IEEE80211_ELEMID_VENDOR
+							&& key_data[1] >= 20
+							&& memcmp(rsn_oui, key_data + 2, sizeof(rsn_oui)) == 0
+							&& key_data[5] == RSN_CSE_CCMP
+							&& memcmp(ZERO, key_data + 6, 16) != 0)
 						{
-							// Got a PMKID value?!
-							memcpy(st_cur->wpa.pmkid, &h80211[z + 105], 16);
-
-							/* copy the key descriptor version */
-							st_cur->wpa.keyver = (uint8_t)(h80211[z + 6] & 7);
-
+							memcpy(st_cur->wpa.pmkid, key_data + 6, 16);
+							st_cur->wpa.keyver = (uint8_t) (h80211[z + 6] & 7);
 							memcpy(st_cur->wpa.stmac, st_cur->stmac, 6);
 							if (!ap_cur->pmkid_logged)
 							{
@@ -3833,20 +3843,17 @@ skip_probe:
 								memcpy(lopt.wpa_bssid, ap_cur->bssid, 6);
 								memset(lopt.message, '\x00', sizeof(lopt.message));
 								snprintf(lopt.message,
-										sizeof(lopt.message) - 1,
-										"][ PMKID found: "
-										"%02X:%02X:%02X:%02X:%02X:%02X ",
-										lopt.wpa_bssid[0],
-										lopt.wpa_bssid[1],
-										lopt.wpa_bssid[2],
-										lopt.wpa_bssid[3],
-										lopt.wpa_bssid[4],
-										lopt.wpa_bssid[5]);
+										 sizeof(lopt.message) - 1,
+										 "][ PMKID captured in M1: "
+										 "%02X:%02X:%02X:%02X:%02X:%02X ",
+										 lopt.wpa_bssid[0], lopt.wpa_bssid[1],
+										 lopt.wpa_bssid[2], lopt.wpa_bssid[3],
+										 lopt.wpa_bssid[4], lopt.wpa_bssid[5]);
 								append_tui_message_history_now(lopt.message);
 							}
-
-							goto write_packet;
+							break;
 						}
+						key_data += 2 + key_data[1];
 					}
 				}
 			}
@@ -3863,7 +3870,10 @@ skip_probe:
 				{
 					memcpy(st_cur->wpa.snonce, &h80211[z + 17], 32);
 					st_cur->wpa.state |= 2;
+					st_cur->wpa.found |= 1 << 2;
 				}
+				else
+					st_cur->wpa.found |= 1 << 4;
 
 				if ((st_cur->wpa.state & 4) != 4)
 				{
@@ -3900,6 +3910,7 @@ skip_probe:
 					memcpy(st_cur->wpa.anonce, &h80211[z + 17], 32);
 					st_cur->wpa.state |= 1;
 				}
+				st_cur->wpa.found |= 1 << 3;
 
 				if ((st_cur->wpa.state & 4) != 4)
 				{
@@ -3933,7 +3944,7 @@ skip_probe:
 				memset(lopt.message, '\x00', sizeof(lopt.message));
 				snprintf(lopt.message,
 						 sizeof(lopt.message) - 1,
-						 "][ WPA handshake: %02X:%02X:%02X:%02X:%02X:%02X ",
+						 "][ EAPOL M1+M2 captured (usable): %02X:%02X:%02X:%02X:%02X:%02X ",
 						 lopt.wpa_bssid[0],
 						 lopt.wpa_bssid[1],
 						 lopt.wpa_bssid[2],
@@ -3985,6 +3996,20 @@ skip_probe:
 						return (EXIT_FAILURE);
 					}
 				}
+			}
+
+			if ((st_cur->wpa.found & ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4)))
+					== ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4))
+				&& !ap_cur->full_handshake_logged)
+			{
+				ap_cur->full_handshake_logged = 1;
+				memset(lopt.message, '\0', sizeof(lopt.message));
+				snprintf(lopt.message,
+						 sizeof(lopt.message) - 1,
+						 "][ EAPOL 4-way complete: %02X:%02X:%02X:%02X:%02X:%02X ",
+						 ap_cur->bssid[0], ap_cur->bssid[1], ap_cur->bssid[2],
+						 ap_cur->bssid[3], ap_cur->bssid[4], ap_cur->bssid[5]);
+				append_tui_message_history_now(lopt.message);
 			}
 		}
 	}
@@ -9123,11 +9148,13 @@ static int write_wpa_snapshot(void)
 
 	snprintf(lopt.message,
 			 sizeof(lopt.message),
-			 "][ wrote %zu handshake%s and %zu PMKID%s to %s%s",
+			 "][ wrote %zu usable M1+M2%s (%zu full 4-way) and %zu PMKID%s (%zu PMKID-only) to %s%s",
 			 stats.handshake_records,
 			 stats.handshake_records == 1 ? "" : "s",
+			 stats.full_handshake_records,
+			 stats.pmkid_records,
+			 stats.pmkid_records == 1 ? "" : "s",
 			 stats.pmkid_only_records,
-			 stats.pmkid_only_records == 1 ? "" : "s",
 			 filename,
 			 stats.missing_essid_aps == 0 ? "" : " (SSID missing for one or more APs)");
 	append_tui_message_history_now(lopt.message);

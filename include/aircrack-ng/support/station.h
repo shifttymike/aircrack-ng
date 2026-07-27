@@ -134,6 +134,7 @@ struct AP_info
 	int beacon_logged; /* We need 1 beacon per AP  */
 	int pmkid_logged; /* PMKID message shown      */
 	int handshake_logged; /* handshake message shown */
+	int full_handshake_logged; /* complete 4-way message shown */
 	int dict_started; /* 1 if dict attack started */
 	int ssid_length; /* length of ssid           */
 	float gps_loc_min[5]; /* min gps coordinates      */

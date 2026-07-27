@@ -1761,9 +1761,17 @@ static void render_station_row(int y,
 			 st->rate_from / 1000000);
 	snprintf(lost, sizeof(lost), "%d", st->missed);
 	snprintf(frames, sizeof(frames), "%lu", st->nb_pkt);
-	strlcpy(notes,
-			(st->wpa.pmkid[0] != 0) ? "PMKID" : (st->wpa.state == 7 ? "EAPOL" : ""),
-			sizeof(notes));
+	if (st->wpa.pmkid[0] != 0 && st->wpa.state == 7)
+		strlcpy(notes, "P+M2", sizeof(notes));
+	else if (st->wpa.pmkid[0] != 0)
+		strlcpy(notes, "PMKID", sizeof(notes));
+	else if ((st->wpa.found & ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4)))
+		 == ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4)))
+		strlcpy(notes, "4-WAY", sizeof(notes));
+	else if (st->wpa.state == 7)
+		strlcpy(notes, "M1+M2", sizeof(notes));
+	else
+		notes[0] = '\0';
 
 	line[0] = ' ';
 	line[1] = '\0';

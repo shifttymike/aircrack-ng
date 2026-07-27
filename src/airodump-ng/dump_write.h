@@ -57,6 +57,8 @@ int dump_write_kismet_csv(struct AP_info * ap_1st,
 struct dump_wpa_snapshot_stats
 {
 	size_t handshake_records;
+	size_t full_handshake_records;
+	size_t pmkid_records;
 	size_t pmkid_only_records;
 	size_t missing_essid_aps;
 };
