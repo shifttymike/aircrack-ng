@@ -9127,7 +9127,7 @@ static int write_wpa_snapshot(void)
 
 	snprintf(snapshot_filename,
 			 sizeof(snapshot_filename),
-			 "wpa-handshakes-%02d%02d-%02d%02d%02d.ivs",
+			 "wpa-handshakes-%02d%02d-%02d%02d%02d.wpa",
 			 lt->tm_mon + 1,
 			 lt->tm_mday,
 			 lt->tm_hour,
