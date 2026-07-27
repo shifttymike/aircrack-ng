@@ -259,7 +259,7 @@ static const struct station_header_field station_header_fields[] = {
 	{ STATION_HEADER_LOST, STA_SORT_BY_LOST, "Lost", 4, 0, 2 },
 	{ STATION_HEADER_FRAMES, STA_SORT_BY_FRAMES, "Frames", 8, 0, 2 },
 	{ STATION_HEADER_LAST_SEEN, STA_SORT_BY_LAST_SEEN, "Last seen", 11, 0, 2 },
-	{ STATION_HEADER_NOTES, STA_SORT_BY_NOTES, "Notes", 5, 0, 2 },
+	{ STATION_HEADER_NOTES, STA_SORT_BY_NOTES, "Notes", 8, 0, 2 },
 	{ STATION_HEADER_PROBES, STA_SORT_BY_PROBES, "Probes", 6, 0, 2 },
 };
 
@@ -1762,7 +1762,7 @@ static void render_station_row(int y,
 	snprintf(lost, sizeof(lost), "%d", st->missed);
 	snprintf(frames, sizeof(frames), "%lu", st->nb_pkt);
 	if (st->wpa.pmkid[0] != 0 && st->wpa.state == 7)
-		strlcpy(notes, "P+M2", sizeof(notes));
+		strlcpy(notes, "PMK+M1/2", sizeof(notes));
 	else if (st->wpa.pmkid[0] != 0)
 		strlcpy(notes, "PMKID", sizeof(notes));
 	else if ((st->wpa.found & ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4)))
@@ -2129,7 +2129,7 @@ static void render_help_overlay(void)
 		"m: view message history",
 		"L: cycle station privacy filter",
 		"t: tune channel",
-		"w: write WPA snapshot",
+		"w: write WPA snapshot and Hashcat export",
 		"c: clear AP filter",
 		"o: toggle colors",
 		"M: toggle mouse capture",

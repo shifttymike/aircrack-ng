@@ -950,7 +950,7 @@ static enum airodump_tui_message_style message_style_from_text(const char * mess
 
 	if (strstr(message, "PMKID captured in M1:") != NULL
 		|| strstr(message, "EAPOL M1+M2 captured") != NULL
-		|| strstr(message, "EAPOL 4-way complete") != NULL)
+		|| strstr(message, "EAPOL four-way handshake complete") != NULL)
 	{
 		return (AIRODUMP_TUI_MESSAGE_STYLE_SUCCESS);
 	}
@@ -1708,9 +1708,9 @@ static const char usage[] =
 	"  usage: airodump-ng <options> <interface>[,<interface>,...]\n"
 	"\n"
 	"  Options:\n"
-	"      --ivs                 : Save only captured IVs\n"
+	"      --ivs                 : Write IVS2 records only (WEP IVs and WPA data)\n"
 	"      --gpsd                : Use GPSd\n"
-	"      -w / --write <prefix> : Dump file prefix\n"
+	"      -w / --write <prefix> : Output file prefix\n"
 	"      -w                    : same as --write \n"
 	"      -p / --ppi            : Create pcap PPI headers with radiotap/gps tags\n"
 	"      -y / --coords         : Provide fixed coordinates for ppi geo tags. Use with --ppi option.\n"
@@ -1791,7 +1791,7 @@ static const char usage[] =
 	"      b / B                 : Switch band next / previous\n"
 	"      v                     : Show channel availability for active band\n"
 	"      g                     : Set regulatory domain\n"
-	"      w                     : Write buffered WPA/PMKID snapshot\n"
+	"      w                     : Write WPA snapshot and Hashcat export\n"
 	"      t                     : Tune channel and stop hopping\n"
 	"      l                     : Lock to selected AP channel\n"
 	"      r                     : Resume channel hopping\n"
@@ -4009,7 +4009,7 @@ skip_probe:
 				memset(lopt.message, '\0', sizeof(lopt.message));
 				snprintf(lopt.message,
 						 sizeof(lopt.message) - 1,
-						 "][ EAPOL 4-way complete: %02X:%02X:%02X:%02X:%02X:%02X ",
+						 "][ EAPOL four-way handshake complete: %02X:%02X:%02X:%02X:%02X:%02X ",
 						 ap_cur->bssid[0], ap_cur->bssid[1], ap_cur->bssid[2],
 						 ap_cur->bssid[3], ap_cur->bssid[4], ap_cur->bssid[5]);
 				append_tui_message_history_now(lopt.message);
@@ -9168,14 +9168,14 @@ static int write_wpa_snapshot(void)
 	{
 		snprintf(lopt.message,
 				 sizeof(lopt.message),
-				 "][ no WPA handshakes buffered");
+				 "][ no WPA handshakes or PMKIDs buffered");
 		append_tui_message_history_now(lopt.message);
 		return (0);
 	}
 
 	snprintf(lopt.message,
 			 sizeof(lopt.message),
-			 "][ wrote WPA snapshot to %s; %zu EAPOL and %zu PMKID Hashcat record%s to %s%s",
+			 "][ wrote WPA snapshot to %s; %zu EAPOL-handshake and %zu PMKID Hashcat record%s to %s%s",
 			 snapshot_filename,
 			 hashcat_eapol_records,
 			 hashcat_pmkid_records,
