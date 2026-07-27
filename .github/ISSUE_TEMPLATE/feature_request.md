@@ -6,7 +6,7 @@ about: Suggest an idea for this project
 
 Please read the following:
 
-  - Always test with current git master before opening a feature request
+  - Test with the current release or default branch before opening a feature request
   - Use the search function to see if the feature you're about to request isn't a duplicate. If an existing issue is open and you have new information, update it
   - One feature/topic request per ticket
   - Don't worry about any of the items on the right panel (Assignee, Labels or Milestone), we will take care of them

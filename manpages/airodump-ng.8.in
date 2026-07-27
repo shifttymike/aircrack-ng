@@ -132,10 +132,8 @@ Filter APs by ESSID using a regular expression.
 .SH INTERACTION
 .PP
 .BI airodump-ng
-can receive and interpret key strokes while running. The following list describes the currently assigned keys and supposed actions:
-.PP
-When the ncurses TUI is active, the following keys describe the current
-interface (and supersede older single-pane bindings below):
+can receive and interpret key strokes while running. When the ncurses TUI is
+active, the following keys describe the current interface:
 .TP
 .I w
 Write a timestamped WPA snapshot (a .wpa IVS2-compatible file) and a matching
@@ -159,58 +157,31 @@ where the capture adapter and regulatory domain permit them.
 .I t / l / r
 Tune to a channel; lock to the selected AP channel; resume channel hopping.
 .TP
+.I s / S / i
+Cycle the sort field forward/backward; invert the sort direction in the active
+AP or station pane.
+.TP
+.I Tab / Left / Right
+Switch the focused pane. Arrow keys, Page Up/Page Down, Home, and End navigate
+or scroll the focused pane.
+.TP
 .I L / V
 Cycle the locally-administered station privacy filter; toggle OUI vendor labels.
 .TP
+.I o / M / SPACE
+Toggle colors; toggle mouse capture; pause or resume display refresh.
+.TP
 .I ? / F1
 Open or close TUI help.
+.TP
+.I q
+Quit program (press again to confirm).
 .PP
 The AP Mbit field is the advertised maximum PHY rate, not current throughput.
 It is calculated from HT/VHT/HE/EHT MCS, spatial-stream, and operating-width
 information for 802.11n, 802.11ac, 802.11ax (Wi-Fi 6/6E), and 802.11be
 (Wi-Fi 7). HE/EHT figures assume a full-bandwidth SU transmission with a
 0.8 microsecond guard interval.
-.TP
-.I a
-Select active areas by cycling through these display options: AP+STA; AP+STA+ACK; AP only; STA only
-.TP
-.I d
-Reset sorting to defaults (Power)
-.TP
-.I i
-Invert sorting algorithm
-.TP
-.I m
-Mark the selected AP or cycle through different colors if the selected AP is already marked
-.TP
-.I o
-Enable colored display of APs and their stations.
-.TP
-.I p
-Disable colored display.
-.TP
-.I q
-Quit program.
-.TP
-.I r
-(De-)Activate realtime sorting - applies sorting algorithm every time the display will be redrawn
-.TP
-.I s
-Change column to sort by, which currently includes: First seen; BSSID; PWR level; Beacons; Data packets; Packet rate; Channel; Max. data rate; Encryption; Strongest Ciphersuite; Strongest Authentication; ESSID
-.TP
-.I SPACE
-Pause display redrawing/ Resume redrawing
-.TP
-.I TAB
-Enable/Disable scrolling through AP list
-.TP
-.I UP
-Select the AP prior to the currently marked AP in the displayed list if available
-.TP
-.I DOWN
-Select the AP after the currently marked AP if available
-.PP
-If an AP is selected or marked, all the connected stations will also be selected or marked with the same color as the corresponding Access Point. 
 .SH EXAMPLES
 .B airodump-ng
 \-c 9 wlan0mon

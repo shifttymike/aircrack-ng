@@ -1,59 +1,45 @@
-# Aircrack-ng
+# Airodump-ng TUI Edition
 
-## Badges
+[![Release binaries](https://github.com/shifttymike/aircrack-ng/actions/workflows/binary-release.yml/badge.svg)](https://github.com/shifttymike/aircrack-ng/actions/workflows/binary-release.yml)
 
-### GitHub CI
+This is a standalone community derivative of the [official Aircrack-ng
+project](https://github.com/aircrack-ng/aircrack-ng), focused on a modern,
+interactive `airodump-ng` workflow. It is not an official Aircrack-ng project
+or release.
 
-[![Alma Linux CI](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/almalinux.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/almalinux.yml)
-[![Alpine Linux](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/alpine.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/alpine.yml)
-[![DragonFlyBSD CI](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/dragonflybsd.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/dragonflybsd.yml)
-[![FreeBSD CI](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/freebsd.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/freebsd.yml)
-[![Gentoo CI](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/gentoo.yml/badge.svg)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/gentoo.yml)
-[![Kali Linux CI](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/kali.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/kali.yml)
-[![Linux CI](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/linux.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/linux.yml)
-[![Linux PCRE CI](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/linux-pcre.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/linux-pcre.yml)
-[![macOS CI](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/macos.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/macos.yml)
-[![NetBSD CI](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/netbsd.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/netbsd.yml)
-[![OpenBSD CI](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/openbsd.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/openbsd.yml)
-[![Windows CI](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/windows.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/windows.yml)
+## Release binaries
 
-### Others
+Tagged releases provide `airodump-ng` only for Linux `x86_64` and `arm64`.
+Download the appropriate archive from [Releases](https://github.com/shifttymike/aircrack-ng/releases), extract it, and run it with a monitor-mode interface:
 
-[![Clang Scan-build](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/scanbuild.yml/badge.svg)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/scanbuild.yml)
-[![Codespell](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/codespell.yml/badge.svg)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/codespell.yml)
-[![Coverity Scan](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/coverity.yml/badge.svg)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/coverity.yml)
-[![Docker (git) push to DockerHub](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/docker.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/docker.yml)
-[![Markdown link](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/markdown-link.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/markdown-link.yml)
-[![PVS-Studio Analysis](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/pvs-studio.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/pvs-studio.yml)
-[![Style & Consistency](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/style.yml/badge.svg?event=push)](https://github.com/aircrack-ng/aircrack-ng/actions/workflows/style.yml)
+```sh
+tar -xzf airodump-ng-linux-x86_64.tar.gz
+./airodump-ng wlan0mon
+```
 
-### Repository versions
+The release binaries are built on Ubuntu 22.04 and require glibc 2.35 or
+newer. They still require a compatible wireless adapter, driver, and the
+permissions normally needed for monitor-mode capture.
 
-![Arch Linux package](https://img.shields.io/archlinux/v/extra/x86_64/aircrack-ng)
-![Debian package](https://img.shields.io/debian/v/aircrack-ng/stable?label=debian%20stable)
-![Debian package](https://img.shields.io/debian/v/aircrack-ng/testing?label=debian%20testing)
-![Docker Image Version (latest by date)](https://img.shields.io/docker/v/aircrackng/git?color=blue&label=Docker%20Tag%20%7C%20git)
-![Fedora package](https://img.shields.io/fedora/v/aircrack-ng)
-![homebrew version](https://img.shields.io/homebrew/v/aircrack-ng)
-![Ubuntu package](https://img.shields.io/ubuntu/v/aircrack-ng/bionic?label=Ubuntu%2018.04)
-![Ubuntu package](https://img.shields.io/ubuntu/v/aircrack-ng/focal?label=Ubuntu%2020.04)
-![Ubuntu package](https://img.shields.io/ubuntu/v/aircrack-ng/jammy?label=Ubuntu%2022.04)
-![Ubuntu package](https://img.shields.io/ubuntu/v/aircrack-ng/kinetic?label=Ubuntu%2022.10)
-![Ubuntu package](https://img.shields.io/ubuntu/v/aircrack-ng/lunar?label=Ubuntu%2023.04)
-![Ubuntu package](https://img.shields.io/ubuntu/v/aircrack-ng/mantic?label=Ubuntu%2023.10)
-![Ubuntu package](https://img.shields.io/ubuntu/v/aircrack-ng/noble?label=Ubuntu%2024.04)
+## What changed
 
-## Description
+The enhanced interface adds keyboard-driven AP/station navigation, responsive
+message and help overlays, multi-band channel controls, WPA snapshot and
+Hashcat export, privacy-aware client filtering, OUI labels, and modern PHY
+rate reporting through Wi-Fi 7. See [the airodump-ng UI and workflow
+guide](README-airodump-ng-changes.md) for the complete behavior and hotkeys.
 
-Aircrack-ng is a complete suite of tools to assess WiFi network security.
+## Authorized use
 
-It focuses on different areas of WiFi security:
- * Monitoring: Packet capture and export of data to text files for further processing by third party tools.
- * Attacking: Replay attacks, deauthentication, fake access points and others via packet injection.
- * Testing: Checking WiFi cards and driver capabilities (capture and injection).
- * Cracking: WEP and WPA PSK (WPA 1 and 2).
+Use this software only on networks, devices, and radio spectrum you own or are
+explicitly authorized to assess. You are responsible for complying with all
+applicable laws and organisational policies.
 
-All tools are command line which allows for heavy scripting. A lot of GUIs have taken advantage of this feature. It works primarily on Linux but also Windows, macOS, FreeBSD, OpenBSD, NetBSD, as well as Solaris and even eComStation 2. 
+## Upstream attribution
+
+This repository retains the upstream Aircrack-ng suite and its licensing and
+attribution. For the original project, full tool suite, packages, and upstream
+documentation, visit [aircrack-ng/aircrack-ng](https://github.com/aircrack-ng/aircrack-ng).
 
 # Building
 
@@ -464,7 +450,7 @@ Next, an installation of [VS Code](https://code.visualstudio.com/) with the foll
 
 1. Clone this repository to your working folder:
 ```
-$ git clone --recursive https://github.com/aircrack-ng/aircrack-ng.git
+$ git clone --recursive https://github.com/shifttymike/aircrack-ng.git
 $ cd aircrack-ng
 ```
 2. After cloning this repository, open the folder inside VS Code.
@@ -506,10 +492,12 @@ Aircrack-ng is available in most distributions repositories. However, it is not 
 
 Some more information is present in the [README](README) file.
 
-Documentation, tutorials, ... can be found on https://aircrack-ng.org
+The [airodump-ng TUI guide](README-airodump-ng-changes.md) documents the
+features specific to this repository. Upstream documentation and tutorials are
+available at https://aircrack-ng.org.
 
-Support is available in the [GitHub Discussions](https://github.com/aircrack-ng/aircrack-ng/discussions) and on IRC (in #aircrack-ng on Libera Chat).
+For bugs in this repository, use [GitHub Issues](https://github.com/shifttymike/aircrack-ng/issues).
 
 Every tool has its own manpage. For aircrack-ng, `man aircrack-ng`
 
-# Infrastructure sponsors
+# Upstream infrastructure sponsors

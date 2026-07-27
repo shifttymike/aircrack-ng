@@ -1,6 +1,7 @@
 # airodump-ng UI and Workflow Changes
 
-This document summarizes the behavior changes made in this workspace.
+This document describes the airodump-ng TUI behavior and workflow additions
+in this repository.
 
 ## Hotkeys
 
@@ -12,7 +13,6 @@ This document summarizes the behavior changes made in this workspace.
 - `t`: tune all capture interfaces to a channel and stop hopping.
 - `l`: lock all capture interfaces to the selected AP's channel.
 - `s` / `S`: cycle the sort field in the active pane next / previous.
-- `R`: toggle realtime sorting.
 - `M`: toggle mouse capture.
 - `c`: clear the selected AP filter.
 - `C`: clear all in-memory AP and station history. Capture continues and newly observed traffic repopulates the panes.

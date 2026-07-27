@@ -1,14 +1,13 @@
 ---
 name: Bug report
-about: Used to report a defect in the source code, scripts, website, documentation, etc... Post questions
-  in the GitHub Discussions tab - Read our
-  documentation at https://aircrack-ng.org
+about: Report a reproducible defect in this repository's source code, scripts, or documentation.
 ---
 
 <!--
-**Bug reports will only be accepted against the current tip of the master git branch. Anything else will be rejected. Questions must be posted in the discussion board at <https://github.com/aircrack-ng/aircrack-ng/discussions>.**
+**Please reproduce bugs with either the current release or the current default branch before filing.**
 
-For any security-related issues such as exploits, buffer overflows, and such, refer to our security policy: <https://github.com/aircrack-ng/aircrack-ng/security/policy>
+For security-sensitive issues, do not open a public issue. Follow this
+repository's security policy instead.
 
 Please read the following before reporting the issue:
 
@@ -16,14 +15,8 @@ Please read the following before reporting the issue:
 - Unless bugs are linked, one bug per ticket.
 - Don't worry about any of the items on the right panel (Assignee, Labels or Milestone), we will take care of them.
 
-The following must be taken to the GitHub Discussions first, as in these cases, it often turns out to be a technique issue or the issue is out of our control:
-
-- Not receiving any packets with airodump-ng or any other tool.
-- Can't crack a network.
-- Wireless card doesn't work.
-- Channel -1.
-
-Make sure to check our documentation at <https://aircrack-ng.org/doku.php> as well as our fairly comprehensive FAQ at <https://aircrack-ng.org/doku.php?id=faq>.
+For behavior specific to this release, check the local airodump-ng TUI guide
+first. The upstream documentation remains useful for the rest of the suite.
 
 **REMOVE ALL OF THE ABOVE TEXT**
 -->
@@ -39,7 +32,7 @@ Please select from one of the following software defect descriptions. Pick the o
 - [ ] Defect - Compilation or `make check` issue - Attach `config.log` and provide relevant system information such as `lscpu` - Make sure dependencies are installed
 - [ ] Defect - Crash
 - [ ] Defect - Incorrect value displayed/received/stored
-- [ ] Defect - Unexpected behavior (obvious or confirmed in the GitHub Discussions)
+- [ ] Defect - Unexpected behavior
 
 ## System information
 
