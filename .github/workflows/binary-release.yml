@@ -30,7 +30,7 @@ jobs:
           - arch: x86_64
             runner: ubuntu-22.04
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
 
     steps:
       - uses: actions/checkout@v4
@@ -54,6 +54,15 @@ jobs:
           binary_dir=.
           if [ -x .libs/airodump-ng ]; then
             binary_dir=.libs
+          fi
+          max_glibc="$(readelf --version-info "$binary_dir/airodump-ng" \
+            | sed -n 's/.*Name: \(GLIBC_[0-9.]*\).*/\1/p' \
+            | sort -V \
+            | tail -n 1)"
+          if [ -n "$max_glibc" ] \
+            && [ "$(printf '%s\nGLIBC_2.35\n' "$max_glibc" | sort -V | tail -n 1)" != "GLIBC_2.35" ]; then
+            echo "airodump-ng requires $max_glibc; the release baseline is GLIBC_2.35" >&2
+            exit 1
           fi
           tar -C "$binary_dir" -czf airodump-ng-linux-${{ matrix.arch }}.tar.gz airodump-ng
 
