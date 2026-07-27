@@ -218,7 +218,7 @@ int dump_write_csv(struct AP_info * ap_1st,
 				ltime->tm_min,
 				ltime->tm_sec);
 
-		fprintf(opt.f_txt, "%2d, %3d,", ap_cur->channel, ap_cur->max_speed);
+		fprintf(opt.f_txt, "%2d, %.1f,", ap_cur->channel, ap_cur->max_speed);
 
 		if ((ap_cur->security
 			 & (STD_OPN | STD_WEP | STD_WPA | STD_WPA2 | AUTH_SAE | AUTH_OWE))
@@ -956,7 +956,7 @@ int dump_write_kismet_netxml(struct AP_info * ap_1st,
 				last_time);
 		fprintf(opt.f_kis_xml, "\t\t\t<type>Beacon</type>\n");
 		fprintf(opt.f_kis_xml,
-				"\t\t\t<max-rate>%d.000000</max-rate>\n",
+				"\t\t\t<max-rate>%.6f</max-rate>\n",
 				ap_cur->max_speed);
 		fprintf(
 			opt.f_kis_xml, "\t\t\t<packets>%lu</packets>\n", ap_cur->nb_bcn);
@@ -1069,8 +1069,8 @@ int dump_write_kismet_netxml(struct AP_info * ap_1st,
 
 		/* XXX: What about 5.5Mbit */
 		fprintf(opt.f_kis_xml,
-				"\t\t<maxseenrate>%d</maxseenrate>\n",
-				(ap_cur->max_speed == -1) ? 0 : ap_cur->max_speed * 1000);
+				"\t\t<maxseenrate>%.0f</maxseenrate>\n",
+				(ap_cur->max_speed < 0) ? 0 : ap_cur->max_speed * 1000);
 
 		/* Those 2 lines always stays the same */
 		fprintf(opt.f_kis_xml, "\t\t<carrier>IEEE 802.11b+</carrier>\n");
@@ -1481,7 +1481,7 @@ int dump_write_kismet_csv(struct AP_info * ap_1st,
 		fprintf(opt.f_kis, "No;");
 
 		// MaxRate
-		fprintf(opt.f_kis, "%d.0;", ap_cur->max_speed);
+		fprintf(opt.f_kis, "%.1f;", ap_cur->max_speed);
 
 		// MaxSeenRate
 		fprintf(opt.f_kis, "0;");

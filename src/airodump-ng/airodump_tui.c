@@ -115,7 +115,7 @@ static const struct ap_header_field ap_header_fields[] = {
 	{ SORT_BY_CHAN, "CH", 3, 1, 2 },
 	{ -1, "Band", 4, 0, 2 },
 	{ SORT_BY_STAS, "STAs", 11, 1, 2 },
-	{ SORT_BY_MBIT, "Mbit", 5, 1, 2 },
+	{ SORT_BY_MBIT, "Mbit", 7, 1, 2 },
 	{ SORT_BY_ENC, "ENC", 6, 0, 1 },
 	{ SORT_BY_CIPHER, "CIPHER", 7, 0, 1 },
 	{ SORT_BY_AUTH, "AUTH", 7, 0, 1 },
@@ -1135,7 +1135,7 @@ static void append_ap_core_columns(char * line,
 	append_padded_column(line, line_size, used, channel, 3, 1, 2);
 	append_padded_column(line, line_size, used, band, 4, 0, 2);
 	append_padded_column(line, line_size, used, stas, 11, 1, 2);
-	append_padded_column(line, line_size, used, mbit, 5, 1, 2);
+	append_padded_column(line, line_size, used, mbit, 7, 1, 2);
 	append_padded_column(line, line_size, used, std, 6, 0, 1);
 	append_padded_column(line, line_size, used, cipher, 7, 0, 1);
 	append_padded_column(line, line_size, used, auth, 7, 0, 1);
@@ -1478,7 +1478,10 @@ static void render_ap_row(int y,
 	snprintf(data, sizeof(data), "%lu", ap->nb_data);
 	snprintf(rate, sizeof(rate), "%d", ap->nb_dataps);
 	snprintf(channel, sizeof(channel), "%d", ap->channel);
-	snprintf(mbit, sizeof(mbit), "%d", ap->max_speed);
+	if (ap->max_speed < 0)
+		snprintf(mbit, sizeof(mbit), "?");
+	else
+		snprintf(mbit, sizeof(mbit), "%.1f", ap->max_speed);
 	band = band_label_from_value(ap->band, ap->channel);
 	if (width < 2) width = 2;
 	if (width > (int) sizeof(line) - 1) width = (int) sizeof(line) - 1;
@@ -1601,7 +1604,10 @@ static size_t measure_ap_row_width(const struct AP_info * ap,
 	snprintf(data, sizeof(data), "%lu", ap->nb_data);
 	snprintf(rate, sizeof(rate), "%d", ap->nb_dataps);
 	snprintf(channel, sizeof(channel), "%d", ap->channel);
-	snprintf(mbit, sizeof(mbit), "%d", ap->max_speed);
+	if (ap->max_speed < 0)
+		snprintf(mbit, sizeof(mbit), "?");
+	else
+		snprintf(mbit, sizeof(mbit), "%.1f", ap->max_speed);
 	band = band_label_from_value(ap->band, ap->channel);
 
 	line[0] = ap_row_marker(ap, selected);
