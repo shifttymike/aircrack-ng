@@ -679,7 +679,6 @@ static int channel_to_frequency_ax(int channel);
 static int channel_to_frequency(int channel);
 static int channel_to_frequency_for_band_mode(int band_mode, int channel);
 static int frequency_to_channel(int frequency);
-static int normalize_frequency_for_band_mode(int band_mode, int frequency);
 static int band_from_frequency_or_channel(int frequency, int channel);
 static int band_from_rx_info(const struct rx_info * ri, int channel);
 static int channel_is_valid_for_band(int channel);
@@ -5006,10 +5005,8 @@ static void process_hopper_event(int card, int value)
 	}
 	else if (lopt.freqoption)
 	{
-		int frequency = normalize_frequency_for_band_mode(lopt.band_mode, value);
-
-		lopt.frequency[card] = frequency;
-		record_hopper_validated_target(frequency, 1);
+		lopt.frequency[card] = value;
+		record_hopper_validated_target(value, 1);
 	}
 	else
 	{
@@ -8528,7 +8525,6 @@ frequency_hopper(struct wif * wi[], int if_num, int chan_count, pid_t parent)
 				if (dropped >= chan_count)
 				{
 					ch = wi_get_freq(wi[card]);
-					ch = normalize_frequency_for_band_mode(lopt.band_mode, ch);
 					lopt.frequency[card] = ch;
 					report_hopper_update(parent, card, ch);
 				}
@@ -8543,14 +8539,12 @@ frequency_hopper(struct wif * wi[], int if_num, int chan_count, pid_t parent)
 				 ? wi_set_freq_ax(wi[card], ch, lopt.ax_bw, lopt.c_seg0, lopt.c_seg1)
 				 : wi_set_freq(wi[card], ch)) == 0)
 			{
-				int effective = normalize_frequency_for_band_mode(
-					lopt.band_mode, wi_get_freq(wi[card]));
+				int effective = wi_get_freq(wi[card]);
 
 				if (effective != ch)
 				{
 					usleep(10000);
-					effective = normalize_frequency_for_band_mode(
-						lopt.band_mode, wi_get_freq(wi[card]));
+					effective = wi_get_freq(wi[card]);
 				}
 				if (lopt.band_mode == BAND_MODE_AX && effective <= 0)
 					effective = ch;
@@ -8722,27 +8716,6 @@ static int frequency_to_channel(int frequency)
 		return (channel);
 
 	return (frequency);
-}
-
-/* Some WEXT drivers report a 6 GHz channel number rather than its MHz value.
- * linux_get_freq() can also translate that number using the 2.4 GHz map, since
- * channels 1-14 are shared. Convert either form using the selected 6 GHz band. */
-static int normalize_frequency_for_band_mode(int band_mode, int frequency)
-{
-	int channel;
-	int mapped_frequency;
-
-	if (band_mode != BAND_MODE_AX || frequency <= 0)
-		return (frequency);
-	if (frequency >= 5925 && frequency <= 7125)
-		return (frequency);
-
-	channel = frequency;
-	if (frequency >= 2400 && frequency < 2500)
-		channel = getChannelFromFrequency(frequency);
-	mapped_frequency = channel_to_frequency_ax(channel);
-
-	return (mapped_frequency > 0 ? mapped_frequency : frequency);
 }
 
 static int band_from_frequency_or_channel(int frequency, int channel)
