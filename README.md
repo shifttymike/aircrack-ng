@@ -7,14 +7,14 @@ Have you ever used Airodump and had one of these thoughts?:
 - Why do I have to re-launch the app just to change the band?
 - Why do I have to re-launch the app just to stop from channel hopping?
 - The network is on 6Ghz, guess I'm doing this on hard mode.
-- F**k, there was a WPA handshake and I didn't run this with `-w` and now it's gone forever :|
+- Crap, there was a WPA handshake and I didn't run this with `-w` and now it's gone forever :|
 
 Well then this might be the fork for you!
 
 Aircrack-ng is the bread-and-butter WiFi tool that everybody loves, but it could be better.
 Other tools exist, but at its core, I believed that Airodump-ng had
 the potential to be something greater, so here we are.
-I fixed a lot of my personal frustrations with the tool and resulted in a tool that I could trust.
+I fixed a lot of my personal frustrations with the tool and ended up with a tool that I could trust.
 
 This fork exists to make it easier to track changes made in the official project and update
 this one, but the purpose is only to provide a replacement Airodump.
@@ -25,9 +25,21 @@ project](https://github.com/aircrack-ng/aircrack-ng), focused on a modern,
 interactive `airodump-ng` workflow. It is not an official Aircrack-ng project
 or release.
 
+## Screenshots
+
+An ncurses-based UI with mouse support and scrollable panes. Honestly, I could have just stopped here.
+<img width="1347" height="497" alt="image" src="https://github.com/user-attachments/assets/ce2ecc56-b4d3-4f0c-81c5-ca69603b0156" />
+
+Did you know that your WiFi drivers lie to you?
+You ask it to tune to ch14, the driver reports success but nothing actually happens.
+The channel overlay takes away the mystery by verifying that the channel actually changed, not just trusting the driver.
+<img width="573" height="333" alt="image" src="https://github.com/user-attachments/assets/c2ce6dde-7a67-4754-8350-3caaf5a193b3" />
+
+
+
 ## Release binaries
 
-Tagged releases provide `airodump-ng` only for Linux `x86_64` and `arm64`.
+Tagged releases provide `airodump-ng` for Linux `x86_64` and `arm64`.
 Download the appropriate archive from [Releases](https://github.com/shifttymike/aircrack-ng/releases), extract it, and run it with a monitor-mode interface:
 
 ```sh
@@ -42,20 +54,19 @@ permissions normally needed for monitor-mode capture.
 ## What changed
 
 The enhanced interface adds
-- keyboard-driven AP/station navigation
-- responsive message and help overlays
+- keyboard-driven AP/station navigation (now with scrolling!)
+- modern PHY rate reporting through Wi-Fi 7
 - multi-band channel controls
-- WPA snapshot and Hashcat export
+- One-key WPA snapshot and Hashcat export
 - privacy-aware client filtering
 - OUI labels
-- modern PHY rate reporting through Wi-Fi 7
 
 See [the airodump-ng UI and workflow guide](README-airodump-ng-changes.md) for the complete behaviour and hotkeys.
 
-## Authorized use
+## Authorised use
 
 Use this software only on networks, devices, and radio spectrum you own or are
-explicitly authorized to assess. You are responsible for complying with all
+explicitly authorised to assess. You are responsible for complying with all
 applicable laws and organisational policies.
 
 ## Upstream attribution
