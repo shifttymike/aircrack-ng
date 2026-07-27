@@ -51,7 +51,11 @@ jobs:
       - name: Package airodump-ng
         shell: bash
         run: |
-          tar -C .libs -czf airodump-ng-linux-${{ matrix.arch }}.tar.gz airodump-ng
+          binary_dir=.
+          if [ -x .libs/airodump-ng ]; then
+            binary_dir=.libs
+          fi
+          tar -C "$binary_dir" -czf airodump-ng-linux-${{ matrix.arch }}.tar.gz airodump-ng
 
       - uses: actions/upload-artifact@v4
         with:
