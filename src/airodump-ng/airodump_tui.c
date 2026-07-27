@@ -1423,15 +1423,18 @@ static void render_ap_row(int y,
 	security_std_string(std, sizeof(std), ap->security);
 	format_ap_station_counts(stas, sizeof(stas), ap, view);
 	pair = ap_color_pair(ap);
-	snprintf(bssid,
-			 sizeof(bssid),
-			 "%02X:%02X:%02X:%02X:%02X:%02X",
-			 ap->bssid[0],
-			 ap->bssid[1],
-			 ap->bssid[2],
-			 ap->bssid[3],
-			 ap->bssid[4],
-			 ap->bssid[5]);
+	if (is_broadcast_ap(ap))
+		strlcpy(bssid, "unassociated", sizeof(bssid));
+	else
+		snprintf(bssid,
+				 sizeof(bssid),
+				 "%02X:%02X:%02X:%02X:%02X:%02X",
+				 ap->bssid[0],
+				 ap->bssid[1],
+				 ap->bssid[2],
+				 ap->bssid[3],
+				 ap->bssid[4],
+				 ap->bssid[5]);
 	snprintf(power, sizeof(power), "%d", ap->avg_power);
 	snprintf(beacons, sizeof(beacons), "%lu", ap->nb_bcn);
 	snprintf(data, sizeof(data), "%lu", ap->nb_data);
@@ -1554,15 +1557,18 @@ static size_t measure_ap_row_width(const struct AP_info * ap,
 	security_auth_string(auth, sizeof(auth), ap->security);
 	security_std_string(std, sizeof(std), ap->security);
 	format_ap_station_counts(stas, sizeof(stas), ap, view);
-	snprintf(bssid,
-			 sizeof(bssid),
-			 "%02X:%02X:%02X:%02X:%02X:%02X",
-			 ap->bssid[0],
-			 ap->bssid[1],
-			 ap->bssid[2],
-			 ap->bssid[3],
-			 ap->bssid[4],
-			 ap->bssid[5]);
+	if (is_broadcast_ap(ap))
+		strlcpy(bssid, "unassociated", sizeof(bssid));
+	else
+		snprintf(bssid,
+				 sizeof(bssid),
+				 "%02X:%02X:%02X:%02X:%02X:%02X",
+				 ap->bssid[0],
+				 ap->bssid[1],
+				 ap->bssid[2],
+				 ap->bssid[3],
+				 ap->bssid[4],
+				 ap->bssid[5]);
 	snprintf(power, sizeof(power), "%d", ap->avg_power);
 	snprintf(beacons, sizeof(beacons), "%lu", ap->nb_bcn);
 	snprintf(data, sizeof(data), "%lu", ap->nb_data);
@@ -1733,7 +1739,7 @@ static void render_station_row(int y,
 	}
 	else
 	{
-		strlcpy(bssid, "(not associated)", sizeof(bssid));
+		strlcpy(bssid, "unassociated", sizeof(bssid));
 	}
 	snprintf(station,
 			 sizeof(station),
