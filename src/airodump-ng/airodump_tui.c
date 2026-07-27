@@ -1657,6 +1657,7 @@ static int message_sidebar_fits(size_t ap_width, int cols, int needs_scrollbar)
 static int compute_ap_box_width(size_t ap_width, int cols, int msg_enabled, int needs_scrollbar)
 {
 	int ap_box_width;
+	int min_ap_box_width;
 
 	if (!msg_enabled) return (cols);
 
@@ -1667,6 +1668,10 @@ static int compute_ap_box_width(size_t ap_width, int cols, int msg_enabled, int 
 		ap_box_width++;
 	if (msg_enabled && cols - ap_box_width < AIRODUMP_TUI_MIN_MESSAGE_WIDTH)
 		ap_box_width = cols - AIRODUMP_TUI_MIN_MESSAGE_WIDTH;
+	/* Keep the Messages sidebar to at most half of the terminal width. */
+	min_ap_box_width = cols - cols / 2;
+	if (msg_enabled && ap_box_width < min_ap_box_width)
+		ap_box_width = min_ap_box_width;
 	if (ap_box_width < 24)
 		ap_box_width = 24;
 	return (ap_box_width);
