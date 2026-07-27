@@ -4542,11 +4542,15 @@ static void dump_sort(void)
 						ap_min = ap_cur;
 					break;
 				case SORT_BY_BEACON:
-					if ((ap_cur->nb_bcn < ap_min->nb_bcn) && lopt.sort_inv)
+					if ((ap_cur->nb_bcn < ap_min->nb_bcn && lopt.sort_inv > 0)
+						|| (ap_cur->nb_bcn > ap_min->nb_bcn
+							&& lopt.sort_inv < 0))
 						ap_min = ap_cur;
 					break;
 				case SORT_BY_DATA:
-					if ((ap_cur->nb_data < ap_min->nb_data) && lopt.sort_inv)
+					if ((ap_cur->nb_data < ap_min->nb_data && lopt.sort_inv > 0)
+						|| (ap_cur->nb_data > ap_min->nb_data
+							&& lopt.sort_inv < 0))
 						ap_min = ap_cur;
 					break;
 				case SORT_BY_PRATE:
