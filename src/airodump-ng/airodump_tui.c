@@ -242,9 +242,6 @@ static size_t build_ap_header_line(char * line,
 		append_padded_column(line, line_size, &used, "UPTIME", 14, 0, 1);
 	if (view->show_wps && used < line_size - 1)
 		append_padded_column(line, line_size, &used, "WPS", 4, 0, 2);
-	if (view->show_manufacturer && used < line_size - 1)
-		append_padded_column(line, line_size, &used, "MANUFACTURER", 12, 0, 2);
-
 	line[used] = '\0';
 	return (used);
 }
@@ -803,6 +800,51 @@ static void security_auth_string(char * out, size_t len, unsigned int security)
 static int is_broadcast_ap(const struct AP_info * ap)
 {
 	return (ap != NULL && memcmp(ap->bssid, BROADCAST, 6) == 0);
+}
+
+static void format_mac_with_vendor(char * out,
+						   size_t out_len,
+						   const uint8_t mac[6],
+						   const char * manufacturer,
+						   int show_manufacturer)
+{
+	char vendor[9];
+	size_t used = 0;
+
+	if (out == NULL || out_len == 0 || mac == NULL) return;
+	if (show_manufacturer && (mac[0] & 0x02) == 0 && manufacturer != NULL
+		&& strcmp(manufacturer, "Unknown") != 0)
+	{
+		while (manufacturer[used] != '\0' && used < sizeof(vendor) - 1
+			&& !isspace((unsigned char) manufacturer[used])
+			&& manufacturer[used] != ',' && manufacturer[used] != ';')
+		{
+			vendor[used] = manufacturer[used];
+			used++;
+		}
+		vendor[used] = '\0';
+		if (used > 0)
+		{
+			snprintf(out,
+					 out_len,
+					 "%s:%02X:%02X:%02X",
+					 vendor,
+					 mac[3],
+					 mac[4],
+					 mac[5]);
+			return;
+		}
+	}
+
+	snprintf(out,
+			 out_len,
+			 "%02X:%02X:%02X:%02X:%02X:%02X",
+			 mac[0],
+			 mac[1],
+			 mac[2],
+			 mac[3],
+			 mac[4],
+			 mac[5]);
 }
 
 static char ap_row_marker(const struct AP_info * ap, int selected)
@@ -1426,15 +1468,11 @@ static void render_ap_row(int y,
 	if (is_broadcast_ap(ap))
 		strlcpy(bssid, "unassociated", sizeof(bssid));
 	else
-		snprintf(bssid,
-				 sizeof(bssid),
-				 "%02X:%02X:%02X:%02X:%02X:%02X",
-				 ap->bssid[0],
-				 ap->bssid[1],
-				 ap->bssid[2],
-				 ap->bssid[3],
-				 ap->bssid[4],
-				 ap->bssid[5]);
+		format_mac_with_vendor(bssid,
+							 sizeof(bssid),
+							 ap->bssid,
+							 ap->manuf,
+							 view->show_manufacturer);
 	snprintf(power, sizeof(power), "%d", ap->avg_power);
 	snprintf(beacons, sizeof(beacons), "%lu", ap->nb_bcn);
 	snprintf(data, sizeof(data), "%lu", ap->nb_data);
@@ -1480,13 +1518,6 @@ static void render_ap_row(int y,
 						 ap->wps.version >> 4,
 						 ap->wps.version & 0xF);
 		}
-	}
-
-	if (view->show_manufacturer && ap->manuf != NULL
-		&& strlen(line) < sizeof(line) - 32)
-	{
-		size_t used = strlen(line);
-		snprintf(line + used, sizeof(line) - used, " %s", ap->manuf);
 	}
 
 	if (ap->essid[0] != 0x00 && strlen(line) < sizeof(line) - 4)
@@ -1560,15 +1591,11 @@ static size_t measure_ap_row_width(const struct AP_info * ap,
 	if (is_broadcast_ap(ap))
 		strlcpy(bssid, "unassociated", sizeof(bssid));
 	else
-		snprintf(bssid,
-				 sizeof(bssid),
-				 "%02X:%02X:%02X:%02X:%02X:%02X",
-				 ap->bssid[0],
-				 ap->bssid[1],
-				 ap->bssid[2],
-				 ap->bssid[3],
-				 ap->bssid[4],
-				 ap->bssid[5]);
+		format_mac_with_vendor(bssid,
+							 sizeof(bssid),
+							 ap->bssid,
+							 ap->manuf,
+							 view->show_manufacturer);
 	snprintf(power, sizeof(power), "%d", ap->avg_power);
 	snprintf(beacons, sizeof(beacons), "%lu", ap->nb_bcn);
 	snprintf(data, sizeof(data), "%lu", ap->nb_data);
@@ -1612,13 +1639,6 @@ static size_t measure_ap_row_width(const struct AP_info * ap,
 						 ap->wps.version >> 4,
 						 ap->wps.version & 0xF);
 		}
-	}
-
-	if (view->show_manufacturer && ap->manuf != NULL
-		&& strlen(line) < sizeof(line) - 32)
-	{
-		size_t used = strlen(line);
-		snprintf(line + used, sizeof(line) - used, " %s", ap->manuf);
 	}
 
 	if (ap->essid[0] != 0x00 && strlen(line) < sizeof(line) - 4)
@@ -1727,29 +1747,21 @@ static void render_station_row(int y,
 
 	if (st->base != NULL && memcmp(st->base->bssid, BROADCAST, 6) != 0)
 	{
-		snprintf(bssid,
-				 sizeof(bssid),
-				 "%02X:%02X:%02X:%02X:%02X:%02X",
-				 st->base->bssid[0],
-				 st->base->bssid[1],
-				 st->base->bssid[2],
-				 st->base->bssid[3],
-				 st->base->bssid[4],
-				 st->base->bssid[5]);
+		format_mac_with_vendor(bssid,
+							 sizeof(bssid),
+							 st->base->bssid,
+							 st->base->manuf,
+							 view->show_manufacturer);
 	}
 	else
 	{
 		strlcpy(bssid, "unassociated", sizeof(bssid));
 	}
-	snprintf(station,
-			 sizeof(station),
-			 "%02X:%02X:%02X:%02X:%02X:%02X",
-			 st->stmac[0],
-			 st->stmac[1],
-			 st->stmac[2],
-			 st->stmac[3],
-			 st->stmac[4],
-			 st->stmac[5]);
+	format_mac_with_vendor(station,
+					   sizeof(station),
+					   st->stmac,
+					   st->manuf,
+					   view->show_manufacturer);
 	format_station_last_seen(st, last_seen, sizeof(last_seen));
 	station_band = st->band;
 	station_channel = st->channel;
@@ -2144,6 +2156,7 @@ static void render_help_overlay(void)
 		"c: clear AP filter",
 		"o: toggle colors",
 		"M: toggle mouse capture",
+		"V: toggle vendor labels",
 		"q: quit",
 	};
 	const int line_count = (int) (sizeof(lines) / sizeof(lines[0]));

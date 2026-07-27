@@ -1727,7 +1727,7 @@ static const char usage[] =
 	"                              simulate the arrival rate of them\n"
 	"                              as if they were \"live\".\n"
 	"      -x            <msecs> : Active Scanning Simulation\n"
-	"      --manufacturer        : Display manufacturer from IEEE OUI list\n"
+	"      --manufacturer        : Enable vendor labels from IEEE OUI list (default)\n"
 	"      --uptime              : Display AP Uptime from Beacon Timestamp\n"
 	"      --wps                 : Display WPS information (if any)\n"
 	"      -o / --output-format\n"
@@ -1800,6 +1800,7 @@ static const char usage[] =
 	"      c                     : Clear AP filter\n"
 	"      o                     : Toggle colors\n"
 	"      M                     : Toggle mouse capture\n"
+	"      V                     : Toggle vendor labels\n"
 	"      Hopper warnings       : Driver refused a channel/frequency; try b/B for band\n"
 	"      q                     : Quit\n"
 	"\n"
@@ -2322,7 +2323,7 @@ static int dump_add_packet(unsigned char * h80211,
 			ap_prv->next = ap_cur;
 
 		memcpy(ap_cur->bssid, bssid, 6);
-		if (ap_cur->manuf == NULL)
+		if ((ap_cur->bssid[0] & 0x02) == 0 && ap_cur->manuf == NULL)
 		{
 			ap_cur->manuf = get_manufacturer(
 				ap_cur->bssid[0], ap_cur->bssid[1], ap_cur->bssid[2]);
@@ -2570,7 +2571,7 @@ static int dump_add_packet(unsigned char * h80211,
 
 		memcpy(st_cur->stmac, stmac, 6);
 
-		if (st_cur->manuf == NULL)
+		if ((st_cur->stmac[0] & 0x02) == 0 && st_cur->manuf == NULL)
 		{
 			st_cur->manuf = get_manufacturer(
 				st_cur->stmac[0], st_cur->stmac[1], st_cur->stmac[2]);
@@ -6425,6 +6426,16 @@ static int handle_keycode(int keycode)
 		redraw = 1;
 	}
 
+	if (keycode == 'V')
+	{
+		lopt.show_manufacturer = !lopt.show_manufacturer;
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ vendor labels %s",
+				 lopt.show_manufacturer ? "enabled" : "disabled");
+		redraw = 1;
+	}
+
 	if (keycode == 'L')
 	{
 		station_filter = (station_filter + 1) % 3;
@@ -7316,7 +7327,8 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 						strbuf[len] = '\0';
 					}
 
-					if (ap_cur->manuf == NULL)
+					if ((ap_cur->bssid[0] & 0x02) == 0
+						&& ap_cur->manuf == NULL)
 						ap_cur->manuf = get_manufacturer(ap_cur->bssid[0],
 														 ap_cur->bssid[1],
 														 ap_cur->bssid[2]);
@@ -7324,7 +7336,7 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 					snprintf(strbuf + len,
 							 sizeof(strbuf) - len - 1,
 							 " %s",
-							 ap_cur->manuf);
+							 ap_cur->manuf != NULL ? ap_cur->manuf : "");
 				}
 			}
 
@@ -10397,7 +10409,7 @@ int main(int argc, char * argv[])
 	lopt.show_ack = 0;
 	lopt.hide_known = 0;
 	lopt.maxsize_essid_seen = 5; // Initial value: length of "ESSID"
-	lopt.show_manufacturer = 0;
+	lopt.show_manufacturer = 1;
 	lopt.show_uptime = 0;
 	lopt.hopfreq = DEFAULT_HOPFREQ;
 	opt.s_file = NULL;
