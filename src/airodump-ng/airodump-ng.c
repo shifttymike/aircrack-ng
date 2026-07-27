@@ -730,6 +730,8 @@ static void set_channel_entry_prompt(void);
 static int set_kernel_regdom(const char * country);
 static int refresh_hopper_after_regdom_change(void);
 static int write_wpa_snapshot(void);
+static void clear_ap_station_history(void);
+static int list_tail_free(struct pkt_buf ** list);
 static int get_active_phy_index(void);
 static int get_kernel_regdom(char * out, size_t out_len, int * self_managed);
 static void cache_kernel_regdom(const char * regdom, int self_managed);
@@ -1574,6 +1576,50 @@ static void color_on(void)
 
 		ap_cur = ap_cur->prev;
 	}
+}
+
+static void clear_ap_station_history(void)
+{
+	struct AP_info * ap_cur;
+	struct AP_info * ap_next;
+	struct ST_info * st_cur;
+	struct ST_info * st_next;
+
+	set_selected_ap(NULL, selection_direction_no);
+
+	ap_cur = lopt.ap_1st;
+	while (ap_cur != NULL)
+	{
+		ap_next = ap_cur->next;
+		uniqueiv_wipe(ap_cur->uiv_root);
+		list_tail_free(&(ap_cur->packets));
+		if (lopt.manufList) free(ap_cur->manuf);
+		if (lopt.detect_anomaly) data_wipe(ap_cur->data_root);
+		free(ap_cur);
+		ap_cur = ap_next;
+	}
+
+	st_cur = lopt.st_1st;
+	while (st_cur != NULL)
+	{
+		st_next = st_cur->next;
+		if (lopt.manufList) free(st_cur->manuf);
+		free(st_cur);
+		st_cur = st_next;
+	}
+
+	lopt.ap_1st = NULL;
+	lopt.ap_end = NULL;
+	lopt.st_1st = NULL;
+	lopt.st_end = NULL;
+	lopt.numaps = 0;
+	lopt.maxnumaps = 0;
+	lopt.maxaps = 0;
+	tui_state.ap_scroll = 0;
+	tui_state.sta_scroll = 0;
+
+	snprintf(lopt.message, sizeof(lopt.message), "][ AP and station history cleared");
+	append_tui_message_history_now(lopt.message);
 }
 
 static THREAD_ENTRY(input_thread)
@@ -6569,6 +6615,12 @@ static int handle_keycode(int keycode)
 		tui_state.sta_scroll = 0;
 		tui_state.msg_scroll = 0;
 		tui_state.focus = 0;
+		redraw = 1;
+	}
+
+	if (keycode == 'C')
+	{
+		clear_ap_station_history();
 		redraw = 1;
 	}
 

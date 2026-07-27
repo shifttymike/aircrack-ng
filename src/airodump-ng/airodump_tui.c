@@ -2123,7 +2123,7 @@ static void render_status_line(const struct airodump_tui_state * state,
 
 	snprintf(line,
 			 sizeof(line),
-	"Arrows/PgUp/PgDn/Home/End: navigate | Tab/Left/Right: pane | ?: help | q: quit");
+	"Arrows: navigate | Tab/Left/Right: pane | ?: help | C: clear | q: quit");
 
 	if (COLS < 1) return;
 	width = MIN(COLS - 1, (int) sizeof(line) - 1);
@@ -2154,6 +2154,7 @@ static void render_help_overlay(void)
 		"t: tune channel",
 		"w: write WPA snapshot and Hashcat export",
 		"c: clear AP filter",
+		"C: clear AP and station history",
 		"o: toggle colors",
 		"M: toggle mouse capture",
 		"V: toggle vendor labels",
