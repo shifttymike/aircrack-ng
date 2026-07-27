@@ -1,4 +1,4 @@
-name: Binary release
+name: airodump-ng binary release
 
 on:
   push:
@@ -21,8 +21,16 @@ permissions:
 
 jobs:
   build:
-    name: airodump-ng Linux x86_64
-    runs-on: ubuntu-22.04
+    name: airodump-ng Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@v4
@@ -43,12 +51,12 @@ jobs:
       - name: Package airodump-ng
         shell: bash
         run: |
-          tar -C .libs -czf airodump-ng-linux-x86_64.tar.gz airodump-ng
+          tar -C .libs -czf airodump-ng-linux-${{ matrix.arch }}.tar.gz airodump-ng
 
       - uses: actions/upload-artifact@v4
         with:
-          name: airodump-ng-linux-x86_64
-          path: airodump-ng-linux-x86_64.tar.gz
+          name: airodump-ng-linux-${{ matrix.arch }}
+          path: airodump-ng-linux-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
 
   release:
