@@ -2472,6 +2472,20 @@ static int dump_add_packet(unsigned char * h80211,
 
 	ap_cur->tlast = time(NULL);
 
+	/*
+	 * A BSSID can be learned from any management or data frame.  Use the
+	 * receive metadata while no beacon/probe response has advertised its
+	 * primary channel yet.
+	 */
+	if (ap_cur->channel == -1)
+	{
+		if (ri->ri_channel > 0 && ri->ri_channel <= HIGHEST_CHANNEL)
+			ap_cur->channel = ri->ri_channel;
+		else
+			ap_cur->channel = lopt.channel[cardnum];
+		ap_cur->band = band_from_rx_info(ri, ap_cur->channel);
+	}
+
 	/* only update power if packets comes from
 	 * the AP: either type == mgmt and SA == BSSID,
 	 * or FromDS == 1 and ToDS == 0 */
