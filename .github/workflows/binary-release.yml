@@ -86,7 +86,12 @@ jobs:
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           target_commitish: ${{ github.sha }}
-          generate_release_notes: true
+          body: |
+            Prebuilt `airodump-ng` binaries for Linux `x86_64` and `arm64`.
+
+            Source tag: `${{ inputs.tag || github.ref_name }}`
+            Build commit: `${{ github.sha }}`
+          generate_release_notes: false
           append_body: false
           prerelease: ${{ inputs.prerelease || false }}
           files: release-assets/*.tar.gz
