@@ -45,7 +45,7 @@ jobs:
       - name: Configure and build
         run: |
           autoreconf -fi
-          ./configure --without-opt --with-experimental
+          ./configure --without-opt --with-experimental --disable-shared --enable-static
           make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)"
 
       - name: Package airodump-ng

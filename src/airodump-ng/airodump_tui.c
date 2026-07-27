@@ -1951,7 +1951,17 @@ static void render_header_line(const struct airodump_tui_view * view)
 		for (i = 0; i < view->num_cards; i++)
 		{
 			int frequency = view->frequency[i];
-			int channel = getChannelFromFrequency(frequency);
+			int channel;
+
+			if (view->show_ax_channels && frequency == 5935)
+				channel = 2;
+			else if (view->show_ax_channels && frequency == 5955)
+				channel = 1;
+			else if (view->show_ax_channels && frequency >= 5975
+					 && frequency <= 7115 && (frequency - 5975) % 20 == 0)
+				channel = (frequency - 5950) / 5;
+			else
+				channel = getChannelFromFrequency(frequency);
 
 			append_linef(line,
 						 sizeof(line),

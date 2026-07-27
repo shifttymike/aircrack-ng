@@ -679,6 +679,7 @@ static int channel_to_frequency_ax(int channel);
 static int channel_to_frequency(int channel);
 static int channel_to_frequency_for_band_mode(int band_mode, int channel);
 static int frequency_to_channel(int frequency);
+static int normalize_6ghz_hopper_frequency(int expected, int observed);
 static int band_from_frequency_or_channel(int frequency, int channel);
 static int band_from_rx_info(const struct rx_info * ri, int channel);
 static int channel_is_valid_for_band(int channel);
@@ -8539,12 +8540,14 @@ frequency_hopper(struct wif * wi[], int if_num, int chan_count, pid_t parent)
 				 ? wi_set_freq_ax(wi[card], ch, lopt.ax_bw, lopt.c_seg0, lopt.c_seg1)
 				 : wi_set_freq(wi[card], ch)) == 0)
 			{
-				int effective = wi_get_freq(wi[card]);
+				int effective = normalize_6ghz_hopper_frequency(
+					ch, wi_get_freq(wi[card]));
 
 				if (effective != ch)
 				{
 					usleep(10000);
-					effective = wi_get_freq(wi[card]);
+					effective = normalize_6ghz_hopper_frequency(
+						ch, wi_get_freq(wi[card]));
 				}
 				if (lopt.band_mode == BAND_MODE_AX && effective <= 0)
 					effective = ch;
@@ -8710,12 +8713,44 @@ static int channel_to_frequency_for_band_mode(int band_mode, int channel)
 
 static int frequency_to_channel(int frequency)
 {
+	int i;
 	int channel = getChannelFromFrequency(frequency);
+
+	if (lopt.band_mode == BAND_MODE_AX)
+	{
+		for (i = 0; channel_frequency_map_ax[i] != -1; i += 2)
+		{
+			if (channel_frequency_map_ax[i + 1] == frequency)
+				return (channel_frequency_map_ax[i]);
+		}
+	}
 
 	if (channel > 0)
 		return (channel);
 
 	return (frequency);
+}
+
+/* Keep this conversion inside the 6 GHz hopper.  Drivers using WEXT may
+ * report a channel number, or its ambiguous 2.4 GHz translation, after a
+ * frequency change.  The expected target prevents mixed-band scans from
+ * interpreting normal 2.4/5 GHz values as 6 GHz channels. */
+static int normalize_6ghz_hopper_frequency(int expected, int observed)
+{
+	int channel;
+	int frequency;
+
+	if (expected < 5925 || expected > 7125 || observed <= 0)
+		return (observed);
+	if (observed >= 5925 && observed <= 7125)
+		return (observed);
+
+	channel = observed;
+	if (observed >= 2400 && observed < 2500)
+		channel = getChannelFromFrequency(observed);
+	frequency = channel_to_frequency_ax(channel);
+
+	return (frequency > 0 ? frequency : observed);
 }
 
 static int band_from_frequency_or_channel(int frequency, int channel)
