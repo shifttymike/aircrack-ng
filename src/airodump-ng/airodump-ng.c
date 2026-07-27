@@ -3894,6 +3894,8 @@ skip_probe:
 					memcpy(
 						st_cur->wpa.eapol, &h80211[z], st_cur->wpa.eapol_size);
 					memset(st_cur->wpa.eapol + 81, 0, 16);
+					st_cur->wpa.eapol_source |=
+						(memcmp(&h80211[z + 17], ZERO, 32) != 0) ? (1 << 2) : (1 << 4);
 					st_cur->wpa.state |= 4;
 					st_cur->wpa.keyver = (uint8_t)(h80211[z + 6] & 7);
 				}
@@ -3930,6 +3932,7 @@ skip_probe:
 					memcpy(
 						st_cur->wpa.eapol, &h80211[z], st_cur->wpa.eapol_size);
 					memset(st_cur->wpa.eapol + 81, 0, 16);
+					st_cur->wpa.eapol_source |= 1 << 3;
 					st_cur->wpa.state |= 4;
 					st_cur->wpa.keyver = (uint8_t)(h80211[z + 6] & 7);
 				}
@@ -9103,10 +9106,13 @@ static int lock_selected_ap_channel(void)
 
 static int write_wpa_snapshot(void)
 {
-	char filename[128];
+	char snapshot_filename[128];
+	char hashcat_filename[128];
 	struct tm * lt;
 	time_t now;
 	struct dump_wpa_snapshot_stats stats = { 0 };
+	size_t hashcat_eapol_records = 0;
+	size_t hashcat_pmkid_records = 0;
 
 	now = time(NULL);
 	lt = localtime(&now);
@@ -9119,20 +9125,41 @@ static int write_wpa_snapshot(void)
 		return (0);
 	}
 
-	snprintf(filename,
-			 sizeof(filename),
-			 "handshakes-%02d%02d-%02d%02d%02d.ivs",
+	snprintf(snapshot_filename,
+			 sizeof(snapshot_filename),
+			 "wpa-handshakes-%02d%02d-%02d%02d%02d.ivs",
+			 lt->tm_mon + 1,
+			 lt->tm_mday,
+			 lt->tm_hour,
+			 lt->tm_min,
+			 lt->tm_sec);
+	snprintf(hashcat_filename,
+			 sizeof(hashcat_filename),
+			 "wpa-handshakes-%02d%02d-%02d%02d%02d.22000",
 			 lt->tm_mon + 1,
 			 lt->tm_mday,
 			 lt->tm_hour,
 			 lt->tm_min,
 			 lt->tm_sec);
 
-	if (dump_write_wpa_snapshot(filename, lopt.st_1st, &stats) != 0)
+	if (dump_write_wpa_snapshot(snapshot_filename, lopt.st_1st, &stats) != 0)
 	{
 		snprintf(lopt.message,
 				 sizeof(lopt.message),
 				 "][ failed to write WPA snapshot");
+		append_tui_message_history_now(lopt.message);
+		return (0);
+	}
+	if (dump_write_hashcat_snapshot(hashcat_filename,
+								 lopt.st_1st,
+								 &hashcat_eapol_records,
+								 &hashcat_pmkid_records)
+		!= 0)
+	{
+		snprintf(lopt.message,
+				 sizeof(lopt.message),
+				 "][ wrote WPA snapshot to %s; failed to write Hashcat export",
+				 snapshot_filename);
 		append_tui_message_history_now(lopt.message);
 		return (0);
 	}
@@ -9148,15 +9175,15 @@ static int write_wpa_snapshot(void)
 
 	snprintf(lopt.message,
 			 sizeof(lopt.message),
-			 "][ wrote %zu usable M1+M2%s (%zu full 4-way) and %zu PMKID%s (%zu PMKID-only) to %s%s",
-			 stats.handshake_records,
-			 stats.handshake_records == 1 ? "" : "s",
-			 stats.full_handshake_records,
-			 stats.pmkid_records,
-			 stats.pmkid_records == 1 ? "" : "s",
-			 stats.pmkid_only_records,
-			 filename,
-			 stats.missing_essid_aps == 0 ? "" : " (SSID missing for one or more APs)");
+			 "][ wrote WPA snapshot to %s; %zu EAPOL and %zu PMKID Hashcat record%s to %s%s",
+			 snapshot_filename,
+			 hashcat_eapol_records,
+			 hashcat_pmkid_records,
+			 hashcat_eapol_records + hashcat_pmkid_records == 1 ? "" : "s",
+			 hashcat_filename,
+			 hashcat_eapol_records + hashcat_pmkid_records == 0
+				 ? " (no directly exportable records)"
+				 : "");
 	append_tui_message_history_now(lopt.message);
 	return (1);
 }

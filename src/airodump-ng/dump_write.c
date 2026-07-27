@@ -1722,3 +1722,120 @@ write_failed:
 	fclose(fp);
 	return (1);
 }
+
+static void dump_write_hashcat_hex(FILE * fp, const uint8_t * value, size_t len)
+{
+	static const char hex[] = "0123456789abcdef";
+	size_t i;
+
+	for (i = 0; i < len; i++)
+	{
+		fputc(hex[value[i] >> 4], fp);
+		fputc(hex[value[i] & 0x0f], fp);
+	}
+}
+
+static uint8_t dump_get_hashcat_message_pair(const struct WPA_hdsk * wpa)
+{
+	static const struct
+	{
+		uint8_t found_mask;
+		uint8_t eapol_mask;
+		uint8_t value;
+	} pairs[] = {{(1 << 1) | (1 << 2), 1 << 2, 0x80},
+				 {(1 << 1) | (1 << 4), 1 << 4, 0x81},
+				 {(1 << 2) | (1 << 3), 1 << 2, 0x82},
+				 {(1 << 2) | (1 << 3), 1 << 3, 0x83},
+				 {(1 << 3) | (1 << 4), 1 << 3, 0x84},
+				 {(1 << 3) | (1 << 4), 1 << 4, 0x85}};
+	size_t i;
+
+	for (i = 0; i < sizeof(pairs) / sizeof(pairs[0]); i++)
+		if ((wpa->found & pairs[i].found_mask) == pairs[i].found_mask
+			&& (wpa->eapol_source & pairs[i].eapol_mask) != 0)
+			return (pairs[i].value);
+	return (0);
+}
+
+int dump_write_hashcat_snapshot(const char * filename,
+								struct ST_info * st_1st,
+								size_t * eapol_records,
+								size_t * pmkid_records)
+{
+	FILE * fp;
+	struct ST_info * st_cur;
+	uint8_t zero_pmkid[16] = {0};
+	uint8_t zero_nonce[32] = {0};
+	uint8_t zero_mic[16] = {0};
+	size_t eapol_count = 0;
+	size_t pmkid_count = 0;
+
+	if (filename == NULL || filename[0] == '\0' || st_1st == NULL) return (0);
+	if (eapol_records != NULL) *eapol_records = 0;
+	if (pmkid_records != NULL) *pmkid_records = 0;
+
+	fp = fopen(filename, "w");
+	if (fp == NULL)
+	{
+		perror("fopen failed");
+		return (1);
+	}
+
+	for (st_cur = st_1st; st_cur != NULL; st_cur = st_cur->next)
+	{
+		const struct AP_info * ap = st_cur->base;
+		const struct WPA_hdsk * wpa = &st_cur->wpa;
+		uint8_t message_pair;
+
+		if (ap == NULL || ap->ssid_length == 0 || ap->ssid_length > ESSID_LENGTH
+			|| ap->essid[0] == '\0')
+			continue;
+
+		if (wpa->state > 0
+			&& memcmp(wpa->pmkid, zero_pmkid, sizeof(zero_pmkid)) != 0)
+		{
+			fputs("WPA*01*", fp);
+			dump_write_hashcat_hex(fp, wpa->pmkid, sizeof(wpa->pmkid));
+			fputc('*', fp);
+			dump_write_hashcat_hex(fp, ap->bssid, sizeof(ap->bssid));
+			fputc('*', fp);
+			dump_write_hashcat_hex(fp, st_cur->stmac, sizeof(st_cur->stmac));
+			fputc('*', fp);
+			dump_write_hashcat_hex(fp, ap->essid, ap->ssid_length);
+			fputs("***02\n", fp);
+			pmkid_count++;
+		}
+
+		message_pair = dump_get_hashcat_message_pair(wpa);
+		if (wpa->state != 7 || message_pair == 0 || wpa->eapol_size == 0
+			|| wpa->eapol_size > sizeof(wpa->eapol)
+			|| memcmp(wpa->anonce, zero_nonce, sizeof(zero_nonce)) == 0
+			|| memcmp(wpa->keymic, zero_mic, sizeof(zero_mic)) == 0)
+			continue;
+
+		fputs("WPA*02*", fp);
+		dump_write_hashcat_hex(fp, wpa->keymic, sizeof(wpa->keymic));
+		fputc('*', fp);
+		dump_write_hashcat_hex(fp, ap->bssid, sizeof(ap->bssid));
+		fputc('*', fp);
+		dump_write_hashcat_hex(fp, st_cur->stmac, sizeof(st_cur->stmac));
+		fputc('*', fp);
+		dump_write_hashcat_hex(fp, ap->essid, ap->ssid_length);
+		fputc('*', fp);
+		dump_write_hashcat_hex(fp, wpa->anonce, sizeof(wpa->anonce));
+		fputc('*', fp);
+		dump_write_hashcat_hex(fp, wpa->eapol, wpa->eapol_size);
+		fprintf(fp, "*%02x\n", message_pair);
+		eapol_count++;
+	}
+
+	if (fclose(fp) != 0)
+	{
+		perror("fclose failed");
+		return (1);
+	}
+	if (eapol_records != NULL) *eapol_records = eapol_count;
+	if (pmkid_records != NULL) *pmkid_records = pmkid_count;
+	if (eapol_count + pmkid_count == 0) unlink(filename);
+	return (0);
+}

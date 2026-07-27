@@ -66,5 +66,9 @@ struct dump_wpa_snapshot_stats
 int dump_write_wpa_snapshot(const char * filename,
 							struct ST_info * st_1st,
 							struct dump_wpa_snapshot_stats * stats);
+int dump_write_hashcat_snapshot(const char * filename,
+								struct ST_info * st_1st,
+								size_t * eapol_records,
+								size_t * pmkid_records);
 
 #endif /* _AIRODUMP_NG_DUMP_WRITE_H_ */
