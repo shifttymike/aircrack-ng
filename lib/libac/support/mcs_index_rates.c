@@ -183,3 +183,44 @@ float get_80211ac_rate(const int width,
 
 	return MCS_index_rates[width_idx][sgi][amount_ss - 1][mcs_idx];
 }
+
+static float get_80211_he_eht_rate(const int width,
+							const int mcs_idx,
+							const int amount_ss,
+							const int max_mcs)
+{
+	static const int data_tones[] = {234, 468, 980, 1960, 3920};
+	static const int bits_per_subcarrier[] = {1, 2, 2, 4, 4, 6, 6,
+												  6, 8, 8, 10, 10, 12, 12};
+	static const float coding_rate[] = {0.5f, 0.5f, 0.75f, 0.5f, 0.75f,
+										 0.6666667f, 0.75f, 0.8333333f, 0.75f,
+										 0.8333333f, 0.75f, 0.8333333f, 0.75f,
+										 0.8333333f};
+	int width_idx;
+
+	if (mcs_idx < 0 || mcs_idx > max_mcs || amount_ss < 1 || amount_ss > 8)
+		return -1.0f;
+	switch (width)
+	{
+		case 20: width_idx = 0; break;
+		case 40: width_idx = 1; break;
+		case 80: width_idx = 2; break;
+		case 160: width_idx = 3; break;
+		case 320: width_idx = 4; break;
+		default: return -1.0f;
+	}
+
+	/* HE/EHT full-bandwidth SU PPDU with the mandatory 0.8 us GI. */
+	return (data_tones[width_idx] * bits_per_subcarrier[mcs_idx]
+				* coding_rate[mcs_idx] * amount_ss) / 13.6f;
+}
+
+float get_80211ax_rate(const int width, const int mcs_idx, const int amount_ss)
+{
+	return get_80211_he_eht_rate(width, mcs_idx, amount_ss, 11);
+}
+
+float get_80211be_rate(const int width, const int mcs_idx, const int amount_ss)
+{
+	return get_80211_he_eht_rate(width, mcs_idx, amount_ss, 13);
+}

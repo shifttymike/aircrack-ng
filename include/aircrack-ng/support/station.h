@@ -87,6 +87,14 @@ struct ax_channel_info
 	unsigned char center_sgmt[2];
 	unsigned char split_chan;
 	unsigned char mhz_160_chan;
+	unsigned char max_mcs;
+	unsigned char max_nss;
+};
+
+struct be_channel_info
+{
+	unsigned char max_mcs;
+	unsigned char max_nss;
 };
 
 enum channel_width_enum
@@ -102,7 +110,8 @@ enum channel_width_enum
 	CHANNEL_40MHZ,
 	CHANNEL_80MHZ,
 	CHANNEL_80_80MHZ,
-	CHANNEL_160MHZ
+	CHANNEL_160MHZ,
+	CHANNEL_320MHZ
 };
 
 /** linked list of detected access points. */
@@ -120,6 +129,7 @@ struct AP_info
 	struct n_channel_info n_channel; /* 802.11n channel info     */
 	struct ac_channel_info ac_channel; /* 802.11ac channel info    */
 	struct ax_channel_info ax_channel; /* 802.11ax channel info    */
+	struct be_channel_info be_channel; /* 802.11be channel info    */
 	int max_speed; /* AP maximum speed in Mb/s */
 	int bss_load_station_count; /* Stations from BSS Load IE */
 	int avg_power; /* averaged signal power    */

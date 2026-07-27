@@ -2461,6 +2461,10 @@ static int dump_add_packet(unsigned char * h80211,
 		ap_cur->ax_channel.center_sgmt[1] = 0;
 		ap_cur->ax_channel.split_chan = 0;
 		ap_cur->ax_channel.mhz_160_chan = 0;
+		ap_cur->ax_channel.max_mcs = 0;
+		ap_cur->ax_channel.max_nss = 0;
+		ap_cur->be_channel.max_mcs = 0;
+		ap_cur->be_channel.max_nss = 0;
 
 	}
 
@@ -3084,6 +3088,61 @@ skip_probe:
 			// Ext tag
 			if (p[0] == 0xff)
 			{
+				/* HE Capabilities: MAC (6) + PHY (11) + MCS/NSS sets. */
+				if (p[2] == 0x23 && p[1] >= 22)
+				{
+					uint16_t tx_mcs;
+					int stream;
+
+					strcpy(ap_cur->standard, "ax");
+					memcpy(&tx_mcs, p + 22, sizeof(tx_mcs));
+					for (stream = 0; stream < MAX_AC_MCS_INDEX; stream++)
+					{
+						uint8_t mcs = (tx_mcs >> (stream * 2)) & 0x03;
+						if (mcs == 3) break;
+						ap_cur->ax_channel.max_nss = stream + 1;
+						ap_cur->ax_channel.max_mcs = mcs == 2 ? 11 : (mcs == 1 ? 9 : 7);
+					}
+				}
+
+				/* EHT Capabilities: MAC (2) + PHY (9) + MCS/NSS sets. */
+				if (p[2] == 0x6c && p[1] >= 15)
+				{
+					uint8_t tx_nss;
+					uint8_t mcs;
+
+					strcpy(ap_cur->standard, "be");
+					/* The three EHT MCS groups are 0-7, 8-9 and 10-13. */
+					for (mcs = 0; mcs < 3; mcs++)
+					{
+						tx_nss = p[14 + mcs] >> 4;
+						if (tx_nss == 0) continue;
+						ap_cur->be_channel.max_nss = tx_nss;
+						ap_cur->be_channel.max_mcs = mcs == 2 ? 13 : (mcs == 1 ? 9 : 7);
+					}
+				}
+
+				/* EHT Operation: operating channel width and center segments. */
+				if (p[2] == 0x6a && p[1] >= 9)
+				{
+					uint8_t width;
+
+					strcpy(ap_cur->standard, "be");
+					if ((p[3] & 0x01) != 0)
+					{
+						width = p[8] & 0x07;
+						switch (width)
+						{
+							case 0: ap_cur->channel_width = CHANNEL_20MHZ; break;
+							case 1: ap_cur->channel_width = CHANNEL_40MHZ; break;
+							case 2: ap_cur->channel_width = CHANNEL_80MHZ; break;
+							case 3: ap_cur->channel_width = CHANNEL_160MHZ; break;
+							case 4: ap_cur->channel_width = CHANNEL_320MHZ; break;
+							default: break;
+						}
+					}
+				}
+
 				/*IEEE Std 802.11ax-2021
 				  Figure 9-788k—6 GHz Operation Information field format
 				  | Primary Channel | Control | Ch. Center Freq. Seg. 0 | Ch. Center Freq. Seg. 1 | Min. Rate |
@@ -3171,7 +3230,8 @@ skip_probe:
 		}
 
 		// Now get max rate
-		if (ap_cur->standard[0] == 'n' || strcmp(ap_cur->standard, "ac") == 0)
+		if (ap_cur->standard[0] == 'n' || strcmp(ap_cur->standard, "ac") == 0
+			|| strcmp(ap_cur->standard, "ax") == 0 || strcmp(ap_cur->standard, "be") == 0)
 		{
 			int sgi = 0;
 			int width = 0;
@@ -3196,6 +3256,9 @@ skip_probe:
 					width = 160;
 					sgi = ap_cur->ac_channel.short_gi_160;
 					break;
+				case CHANNEL_320MHZ:
+					width = 320;
+					break;
 				default:
 					break;
 			}
@@ -3214,15 +3277,27 @@ skip_probe:
 				}
 
 				// Get rate
-				float max_rate
-					= (ap_cur->standard[0] == 'n')
-						  ? get_80211n_rate(
-								width, sgi, ap_cur->n_channel.mcs_index)
-						  : get_80211ac_rate(
-								width,
-								sgi,
-								ap_cur->ac_channel.mcs_index[amount_ss - 1],
-								amount_ss);
+				float max_rate;
+
+				if (ap_cur->standard[0] == 'n')
+					max_rate = get_80211n_rate(width, sgi, ap_cur->n_channel.mcs_index);
+				else if (strcmp(ap_cur->standard, "ax") == 0
+						 && ap_cur->ax_channel.max_nss > 0)
+					max_rate = get_80211ax_rate(width,
+										  ap_cur->ax_channel.max_mcs,
+										  ap_cur->ax_channel.max_nss);
+				else if (strcmp(ap_cur->standard, "be") == 0
+						 && ap_cur->be_channel.max_nss > 0)
+					max_rate = get_80211be_rate(width,
+										  ap_cur->be_channel.max_mcs,
+										  ap_cur->be_channel.max_nss);
+				else if (amount_ss > 0)
+					max_rate = get_80211ac_rate(width,
+										 sgi,
+										 ap_cur->ac_channel.mcs_index[amount_ss - 1],
+										 amount_ss);
+				else
+					max_rate = -1.0f;
 
 				// If no error, update rate
 				if (max_rate > 0)

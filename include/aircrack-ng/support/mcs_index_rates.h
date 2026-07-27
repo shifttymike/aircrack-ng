@@ -50,5 +50,7 @@ float get_80211ac_rate(const int width,
 					   const int is_short_GI,
 					   const int mcs_idx,
 					   const int amount_ss);
+float get_80211ax_rate(const int width, const int mcs_idx, const int amount_ss);
+float get_80211be_rate(const int width, const int mcs_idx, const int amount_ss);
 
 #endif // MCS_INDEX_RATES_H
