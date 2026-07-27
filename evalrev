@@ -27,6 +27,11 @@ if test -d "${DIR}/.git"; then
     if test -z "$EXACTLY"; then
         REVISION="${REVISION}_rev-$(git rev-parse --verify --short HEAD)"
         SCM="_rev-$(git rev-parse --verify --short HEAD)"
+    else
+        # Release builds need a traceable identifier too. Keep the tag as the
+        # base revision and append the commit used to build the binary.
+        SCM="_rev-$(git rev-parse --verify --short HEAD)"
+        REVISION="${REVISION}${SCM}"
     fi
 elif test -d "${DIR}/.svn"; then
     REVISION="_r$(svnversion $DIR 2> /dev/null | sed 's/[^0-9]*//g')"
