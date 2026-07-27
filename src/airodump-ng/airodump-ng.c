@@ -2949,12 +2949,14 @@ skip_probe:
 				// Standard is AC
 				strcpy(ap_cur->standard, "ac");
 
-				ap_cur->ac_channel.split_chan = (uint8_t)((p[3] / 4) % 4);
+				/* VHT Capability Info starts at p[2]. */
+				ap_cur->ac_channel.split_chan = (uint8_t)((p[2] >> 2) & 0x03);
 
-				ap_cur->ac_channel.short_gi_80 = (uint8_t)((p[3] / 32) % 2);
-				ap_cur->ac_channel.short_gi_160 = (uint8_t)((p[3] / 64) % 2);
+				ap_cur->ac_channel.short_gi_80 = (uint8_t)((p[2] >> 5) & 0x01);
+				ap_cur->ac_channel.short_gi_160 = (uint8_t)((p[2] >> 6) & 0x01);
 
-				ap_cur->ac_channel.mu_mimo = (uint8_t)((p[4] & 0x18) % 2);
+				/* MU Beamformer Capable is bit 19 (byte 2, bit 3). */
+				ap_cur->ac_channel.mu_mimo = (uint8_t)((p[4] >> 3) & 0x01);
 
 				// A few things indicate Wave 2: MU-MIMO, 80+80 Channels
 				ap_cur->ac_channel.wave_2
