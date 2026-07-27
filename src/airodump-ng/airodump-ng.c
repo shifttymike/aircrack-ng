@@ -2832,8 +2832,8 @@ skip_probe:
 
 			if (p[0] == 0x01 || p[0] == 0x32)
 			{
-				if (ap_cur->max_speed < (p[1 + p[1]] & 0x7F) / 2.0f)
-					ap_cur->max_speed = (p[1 + p[1]] & 0x7F) / 2.0f;
+				if (ap_cur->max_speed < (p[1 + p[1]] & 0x7F) / 2)
+					ap_cur->max_speed = (p[1 + p[1]] & 0x7F) / 2;
 			}
 
 			if (p[0] == 0x03)
@@ -3181,7 +3181,7 @@ skip_probe:
 				// If no error, update rate
 				if (max_rate > 0)
 				{
-					ap_cur->max_speed = max_rate;
+					ap_cur->max_speed = (int) max_rate;
 				}
 			}
 
@@ -7116,7 +7116,7 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 				// Short or long preamble is not that useful anymore.
 				snprintf(strbuf + len,
 						 sizeof(strbuf) - len,
-						 " %3d %6.1f ",
+						 " %3d %4d   ",
 						 ap_cur->channel,
 						 ap_cur->max_speed);
 			}
@@ -7124,7 +7124,7 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 			{
 				snprintf(strbuf + len,
 						 sizeof(strbuf) - len,
-						 " %3d %6.1f%c%c ",
+						 " %3d %4d%c%c ",
 						 ap_cur->channel,
 						 ap_cur->max_speed,
 						 (ap_cur->security & STD_QOS) ? 'e' : ' ',
