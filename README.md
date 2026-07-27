@@ -1,8 +1,8 @@
-# Airodump-ng TUI Edition
+# Airodump-ng TUI Edition for Modern WiFi
 
 [![Release binaries](https://github.com/shifttymike/aircrack-ng/actions/workflows/binary-release.yml/badge.svg)](https://github.com/shifttymike/aircrack-ng/actions/workflows/binary-release.yml)
 
-Have you ever used airodump and had one of these thoughts?:
+Have you ever used Airodump and had one of these thoughts?:
 - I wish I could scroll so the entries didn't just disappear off the screen
 - Why do I have to re-launch the app just to change the band?
 - Why do I have to re-launch the app just to stop from channel hopping?
@@ -12,8 +12,13 @@ Have you ever used airodump and had one of these thoughts?:
 Well then this might be the fork for you!
 
 Aircrack-ng is the bread-and-butter WiFi tool that everybody loves, but it could be better.
-Other tools like Wifite exist, but at its core, I believed that Airodump-ng had
+Other tools exist, but at its core, I believed that Airodump-ng had
 the potential to be something greater, so here we are.
+I fixed a lot of my personal frustrations with the tool and resulted in a tool that I could trust.
+
+This fork exists to make it easier to track changes made in the official project and update
+this one, but the purpose is only to provide a replacement Airodump.
+The rest of the tools will build, but they are untouched.
 
 This is a standalone community derivative of the [official Aircrack-ng
 project](https://github.com/aircrack-ng/aircrack-ng), focused on a modern,
@@ -36,11 +41,16 @@ permissions normally needed for monitor-mode capture.
 
 ## What changed
 
-The enhanced interface adds keyboard-driven AP/station navigation, responsive
-message and help overlays, multi-band channel controls, WPA snapshot and
-Hashcat export, privacy-aware client filtering, OUI labels, and modern PHY
-rate reporting through Wi-Fi 7. See [the airodump-ng UI and workflow
-guide](README-airodump-ng-changes.md) for the complete behavior and hotkeys.
+The enhanced interface adds
+- keyboard-driven AP/station navigation
+- responsive message and help overlays
+- multi-band channel controls
+- WPA snapshot and Hashcat export
+- privacy-aware client filtering
+- OUI labels
+- modern PHY rate reporting through Wi-Fi 7
+
+See [the airodump-ng UI and workflow guide](README-airodump-ng-changes.md) for the complete behaviour and hotkeys.
 
 ## Authorized use
 
