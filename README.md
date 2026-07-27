@@ -2,6 +2,19 @@
 
 [![Release binaries](https://github.com/shifttymike/aircrack-ng/actions/workflows/binary-release.yml/badge.svg)](https://github.com/shifttymike/aircrack-ng/actions/workflows/binary-release.yml)
 
+Have you ever used airodump and had one of these thoughts?:
+- I wish I could scroll so the entries didn't just disappear off the screen
+- Why do I have to re-launch the app just to change the band?
+- Why do I have to re-launch the app just to stop from channel hopping?
+- The network is on 6Ghz, guess I'm doing this on hard mode.
+- F**k, there was a WPA handshake and I didn't run this with `-w` and now it's gone forever :|
+
+Well then this might be the fork for you!
+
+Aircrack-ng is the bread-and-butter WiFi tool that everybody loves, but it could be better.
+Other tools like Wifite exist, but at its core, I believed that Airodump-ng had
+the potential to be something greater, so here we are.
+
 This is a standalone community derivative of the [official Aircrack-ng
 project](https://github.com/aircrack-ng/aircrack-ng), focused on a modern,
 interactive `airodump-ng` workflow. It is not an official Aircrack-ng project
