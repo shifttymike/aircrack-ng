@@ -723,8 +723,9 @@ static int dump_write_kismet_netxml_client_info(struct ST_info * client,
 			client->stmac[5]);
 
 	/* Manufacturer, if set using standard oui list */
-	manuf
-		= sanitize_xml((unsigned char *) client->manuf, strlen(client->manuf));
+	manuf = client->manuf != NULL
+			? sanitize_xml((unsigned char *) client->manuf, strlen(client->manuf))
+			: NULL;
 	fprintf(opt.f_kis_xml,
 			"\t\t\t<client-manuf>%s</client-manuf>\n",
 			(manuf != NULL) ? manuf : "Unknown");
@@ -1044,8 +1045,10 @@ int dump_write_kismet_netxml(struct AP_info * ap_1st,
 				ap_cur->bssid[5]);
 
 		/* Manufacturer, if set using standard oui list */
-		manuf = sanitize_xml((unsigned char *) ap_cur->manuf,
-							 strlen(ap_cur->manuf));
+		manuf = ap_cur->manuf != NULL
+					? sanitize_xml((unsigned char *) ap_cur->manuf,
+							   strlen(ap_cur->manuf))
+					: NULL;
 		fprintf(opt.f_kis_xml,
 				"\t\t<manuf>%s</manuf>\n",
 				(manuf != NULL) ? manuf : "Unknown");
@@ -1228,8 +1231,10 @@ int dump_write_kismet_netxml(struct AP_info * ap_1st,
 					st_cur->stmac[5]);
 
 			/* Manufacturer, if set using standard oui list */
-			manuf = sanitize_xml((unsigned char *) st_cur->manuf,
-								 strlen(st_cur->manuf));
+			manuf = st_cur->manuf != NULL
+						? sanitize_xml((unsigned char *) st_cur->manuf,
+								  strlen(st_cur->manuf))
+						: NULL;
 			fprintf(opt.f_kis_xml,
 					"\t\t<manuf>%s</manuf>\n",
 					(manuf != NULL) ? manuf : "Unknown");
