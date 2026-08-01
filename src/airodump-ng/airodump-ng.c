@@ -710,6 +710,7 @@ static void append_tui_message_history_now(const char * message);
 static int normalize_tui_message(const char * message, char * out, size_t out_len);
 static void reset_hopper_reject_state(void);
 static void reset_hopper_scan_list(void);
+static int fallback_to_regular_hopping(int requested_channel);
 static void update_hopper_reject_message(void);
 static void process_hopper_event(int card, int value);
 static void record_hopper_refused_target(int value, int is_freq);
@@ -4988,6 +4989,49 @@ static void reset_hopper_scan_list(void)
 		lopt.freqoption = 0;
 		lopt.chanoption = 1;
 	}
+}
+
+/* A driver can refuse an otherwise syntactically valid channel, for example
+ * because of its regulatory domain.  Do not leave the UI in fixed-channel
+ * mode with the radio still tuned somewhere else in that case. */
+static int fallback_to_regular_hopping(int requested_channel)
+{
+	int i;
+
+	reset_hopper_scan_list();
+	lopt.singlechan = 0;
+	lopt.singlefreq = 0;
+
+	if (lopt.freqoption)
+	{
+		if (lopt.own_frequencies == NULL || lopt.own_frequencies[0] <= 0)
+			return (0);
+		for (i = 0; i < lopt.num_cards; i++)
+		{
+			lopt.frequency[i] = lopt.own_frequencies[0];
+			lopt.channel[i] = frequency_to_channel(lopt.frequency[i]);
+		}
+	}
+	else
+	{
+		if (lopt.channels == NULL || lopt.channels[0] <= 0) return (0);
+		for (i = 0; i < lopt.num_cards; i++)
+		{
+			lopt.channel[i] = lopt.channels[0];
+			lopt.frequency[i] = channel_to_frequency_for_band_mode(
+				lopt.band_mode, lopt.channel[i]);
+		}
+	}
+
+	if (!resume_hopper()) return (0);
+
+	snprintf(lopt.message,
+			 sizeof(lopt.message),
+			 "][ warning: failed to tune channel %d; resuming %s hopping",
+			 requested_channel,
+			 band_mode_label(lopt.band_mode));
+	append_tui_message_history(lopt.message, time(NULL));
+	return (1);
 }
 
 static int refresh_hopper_after_regdom_change(void)
@@ -11558,20 +11602,39 @@ int main(int argc, char * argv[])
 			}
 			else
 			{
+				int tune_failed = 0;
+				int requested_channel
+					= frequency_to_channel(lopt.frequency[0]);
+
 				for (i = 0; i < lopt.num_cards; i++)
 				{
 #ifdef CONFIG_LIBNL
-					int result;
-					result = wi_set_freq_ax(wi[i], lopt.frequency[0], lopt.ax_bw, lopt.c_seg0, lopt.c_seg1);
-					if (result != 0) {
-						exit(EXIT_FAILURE);
+					if (wi_set_freq_ax(wi[i],
+								   lopt.frequency[0],
+								   lopt.ax_bw,
+								   lopt.c_seg0,
+								   lopt.c_seg1)
+						!= 0)
+					{
+						tune_failed = 1;
+						break;
 					}
 #else
-					wi_set_freq(wi[i], lopt.frequency[0]);
+					if (wi_set_freq(wi[i], lopt.frequency[0]) != 0)
+					{
+						tune_failed = 1;
+						break;
+					}
 #endif
 					lopt.frequency[i] = lopt.frequency[0];
 				}
-				lopt.singlefreq = 1;
+				if (tune_failed)
+				{
+					if (!fallback_to_regular_hopping(requested_channel))
+						return (EXIT_FAILURE);
+				}
+				else
+					lopt.singlefreq = 1;
 			}
 		}
 		else // use channels
@@ -11636,16 +11699,34 @@ int main(int argc, char * argv[])
 			}
 			else
 			{
+				int tune_failed = 0;
+				int requested_channel = lopt.channel[0];
+
 				for (i = 0; i < lopt.num_cards; i++)
 				{
 #ifdef CONFIG_LIBNL
-					wi_set_ht_channel(wi[i], lopt.channel[0], lopt.htval);
+					if (wi_set_ht_channel(wi[i], lopt.channel[0], lopt.htval)
+						!= 0)
+					{
+						tune_failed = 1;
+						break;
+					}
 #else
-					wi_set_channel(wi[i], lopt.channel[0]);
+					if (wi_set_channel(wi[i], lopt.channel[0]) != 0)
+					{
+						tune_failed = 1;
+						break;
+					}
 #endif
 					lopt.channel[i] = lopt.channel[0];
 				}
-				lopt.singlechan = 1;
+				if (tune_failed)
+				{
+					if (!fallback_to_regular_hopping(requested_channel))
+						return (EXIT_FAILURE);
+				}
+				else
+					lopt.singlechan = 1;
 			}
 		}
 	}
