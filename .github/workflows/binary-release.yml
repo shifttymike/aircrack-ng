@@ -33,7 +33,7 @@ jobs:
             runner: ubuntu-22.04-arm
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install dependencies
         run: |
@@ -66,7 +66,7 @@ jobs:
           fi
           tar -C "$binary_dir" -czf airodump-ng-linux-${{ matrix.arch }}.tar.gz airodump-ng
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: airodump-ng-linux-${{ matrix.arch }}
           path: airodump-ng-linux-${{ matrix.arch }}.tar.gz
@@ -76,7 +76,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           path: release-assets
           merge-multiple: true
