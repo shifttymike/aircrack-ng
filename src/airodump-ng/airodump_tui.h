@@ -7,6 +7,17 @@
 
 #include <ncurses.h>
 
+/* Apple ncurses exposes mouse buttons through BUTTON4 but has no BUTTON5. */
+#ifndef BUTTON5_PRESSED
+#define BUTTON5_PRESSED 0
+#endif
+#ifndef BUTTON5_CLICKED
+#define BUTTON5_CLICKED 0
+#endif
+#ifndef BUTTON5_DOUBLE_CLICKED
+#define BUTTON5_DOUBLE_CLICKED 0
+#endif
+
 #define STA_SORT_BY_NOTHING 0
 #define STA_SORT_BY_BSSID 1
 #define STA_SORT_BY_STATION 2
