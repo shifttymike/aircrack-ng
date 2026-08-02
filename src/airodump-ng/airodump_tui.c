@@ -664,10 +664,10 @@ static size_t collect_visible_stations(struct ST_info * st_1st,
 					{
 						int lhs_note = (lhs->wpa.pmkid[0] != 0)
 										   ? 2
-										   : (lhs->wpa.state == 7 ? 1 : 0);
+									   : (wpa_handshake_is_usable(&lhs->wpa) ? 1 : 0);
 						int rhs_note = (rhs->wpa.pmkid[0] != 0)
 										   ? 2
-										   : (rhs->wpa.state == 7 ? 1 : 0);
+									   : (wpa_handshake_is_usable(&rhs->wpa) ? 1 : 0);
 						cmp = lhs_note - rhs_note;
 						break;
 					}
@@ -952,6 +952,26 @@ static void format_station_last_seen(const struct ST_info * st,
 	age = station_age_seconds(st);
 
 	snprintf(out, out_len, "%02lld:%02lld", age / 60, age % 60);
+}
+
+static void format_wpa_messages(const struct WPA_hdsk * wpa,
+								char * out,
+								size_t out_len)
+{
+	const struct { uint8_t bit; const char * name; } messages[]
+		= {{WPA_HANDSHAKE_M1, "M1"}, {WPA_HANDSHAKE_M2, "M2"},
+		   {WPA_HANDSHAKE_M3, "M3"}, {WPA_HANDSHAKE_M4, "M4"}};
+	size_t i;
+
+	if (out_len == 0) return;
+	out[0] = '\0';
+	if (wpa == NULL) return;
+	for (i = 0; i < sizeof(messages) / sizeof(messages[0]); i++)
+		if ((wpa->found & messages[i].bit) != 0)
+		{
+			if (out[0] != '\0') strlcat(out, "+", out_len);
+			strlcat(out, messages[i].name, out_len);
+		}
 }
 
 static void format_bss_load_station_count(const struct AP_info * ap,
@@ -1784,17 +1804,11 @@ static void render_station_row(int y,
 			 st->rate_from / 1000000);
 	snprintf(lost, sizeof(lost), "%d", st->missed);
 	snprintf(frames, sizeof(frames), "%lu", st->nb_pkt);
-	if (st->wpa.pmkid[0] != 0 && st->wpa.state == 7)
-		strlcpy(notes, "PMK+M1/2", sizeof(notes));
+	format_wpa_messages(&st->wpa, notes, sizeof(notes));
+	if (st->wpa.pmkid[0] != 0 && wpa_handshake_is_usable(&st->wpa))
+		strlcpy(notes, "PMK+EAPOL", sizeof(notes));
 	else if (st->wpa.pmkid[0] != 0)
 		strlcpy(notes, "PMKID", sizeof(notes));
-	else if ((st->wpa.found & ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4)))
-		 == ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4)))
-		strlcpy(notes, "4-WAY", sizeof(notes));
-	else if (st->wpa.state == 7)
-		strlcpy(notes, "M1+M2", sizeof(notes));
-	else
-		notes[0] = '\0';
 
 	line[0] = ' ';
 	line[1] = '\0';

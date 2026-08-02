@@ -1638,13 +1638,16 @@ int dump_write_wpa_snapshot(const char * filename,
 		size_t i;
 
 		if (st_cur->base == NULL) continue;
-		has_handshake = (st_cur->wpa.state == 7 && st_cur->wpa.eapol_size > 0
+		has_handshake = (wpa_handshake_is_usable(&st_cur->wpa)
+						 && st_cur->wpa.eapol_size > 0
 						 && st_cur->wpa.eapol_size <= sizeof(st_cur->wpa.eapol));
 		has_pmkid = (st_cur->wpa.state > 0
 					 && memcmp(st_cur->wpa.pmkid, zero_pmkid, sizeof(zero_pmkid)) != 0);
-		has_full_handshake = ((st_cur->wpa.found & ((1 << 1) | (1 << 2)
-															 | (1 << 3) | (1 << 4)))
-						  == ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4)));
+		has_full_handshake = ((st_cur->wpa.found
+							  & (WPA_HANDSHAKE_M1 | WPA_HANDSHAKE_M2
+								 | WPA_HANDSHAKE_M3 | WPA_HANDSHAKE_M4))
+						  == (WPA_HANDSHAKE_M1 | WPA_HANDSHAKE_M2
+							  | WPA_HANDSHAKE_M3 | WPA_HANDSHAKE_M4));
 		if (!has_handshake && !has_pmkid) continue;
 
 		for (i = 0; i < written_ap_count; i++)
@@ -1747,12 +1750,12 @@ static uint8_t dump_get_hashcat_message_pair(const struct WPA_hdsk * wpa)
 		uint8_t found_mask;
 		uint8_t eapol_mask;
 		uint8_t value;
-	} pairs[] = {{(1 << 1) | (1 << 2), 1 << 2, 0x80},
-				 {(1 << 1) | (1 << 4), 1 << 4, 0x81},
-				 {(1 << 2) | (1 << 3), 1 << 2, 0x82},
-				 {(1 << 2) | (1 << 3), 1 << 3, 0x83},
-				 {(1 << 3) | (1 << 4), 1 << 3, 0x84},
-				 {(1 << 3) | (1 << 4), 1 << 4, 0x85}};
+	} pairs[] = {{WPA_HANDSHAKE_M1 | WPA_HANDSHAKE_M2, WPA_HANDSHAKE_M2, 0x80},
+				 {WPA_HANDSHAKE_M1 | WPA_HANDSHAKE_M4, WPA_HANDSHAKE_M4, 0x81},
+				 {WPA_HANDSHAKE_M2 | WPA_HANDSHAKE_M3, WPA_HANDSHAKE_M2, 0x82},
+				 {WPA_HANDSHAKE_M2 | WPA_HANDSHAKE_M3, WPA_HANDSHAKE_M3, 0x83},
+				 {WPA_HANDSHAKE_M3 | WPA_HANDSHAKE_M4, WPA_HANDSHAKE_M3, 0x84},
+				 {WPA_HANDSHAKE_M3 | WPA_HANDSHAKE_M4, WPA_HANDSHAKE_M4, 0x85}};
 	size_t i;
 
 	for (i = 0; i < sizeof(pairs) / sizeof(pairs[0]); i++)
@@ -1812,7 +1815,7 @@ int dump_write_hashcat_snapshot(const char * filename,
 		}
 
 		message_pair = dump_get_hashcat_message_pair(wpa);
-		if (wpa->state != 7 || message_pair == 0 || wpa->eapol_size == 0
+		if (!wpa_handshake_is_usable(wpa) || message_pair == 0 || wpa->eapol_size == 0
 			|| wpa->eapol_size > sizeof(wpa->eapol)
 			|| memcmp(wpa->anonce, zero_nonce, sizeof(zero_nonce)) == 0
 			|| memcmp(wpa->keymic, zero_mic, sizeof(zero_mic)) == 0)

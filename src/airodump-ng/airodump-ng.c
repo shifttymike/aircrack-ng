@@ -96,6 +96,10 @@ struct devices dev;
 
 static const unsigned char llcnull[] = {0, 0, 0, 0};
 
+#define SECOND_TO_MICROSEC 1000000ULL
+static const uint64_t eapol_max_fourway_timeout = 5 * SECOND_TO_MICROSEC;
+static const uint64_t eapol_interframe_timeout = SECOND_TO_MICROSEC;
+
 static const char * OUI_PATHS[]
 	= {"./airodump-ng-oui.txt",
 	   "/etc/aircrack-ng/airodump-ng-oui.txt",
@@ -680,6 +684,8 @@ static int channel_to_frequency(int channel);
 static int channel_to_frequency_for_band_mode(int band_mode, int channel);
 static int frequency_to_channel(int frequency);
 static int normalize_6ghz_hopper_frequency(int expected, int observed);
+static int channel_tune_verified(struct wif * wi, int channel);
+static int frequency_tune_verified(struct wif * wi, int frequency);
 static int band_from_frequency_or_channel(int frequency, int channel);
 static int band_from_rx_info(const struct rx_info * ri, int channel);
 static int channel_is_valid_for_band(int channel);
@@ -941,6 +947,35 @@ static int normalize_tui_message(const char * message, char * out, size_t out_le
 	return (used > 0);
 }
 
+static void format_wpa_messages(const struct WPA_hdsk * wpa,
+								char * out,
+								size_t out_len)
+{
+	const struct { uint8_t bit; const char * name; } messages[]
+		= {{WPA_HANDSHAKE_M1, "M1"}, {WPA_HANDSHAKE_M2, "M2"},
+		   {WPA_HANDSHAKE_M3, "M3"}, {WPA_HANDSHAKE_M4, "M4"}};
+	size_t i;
+
+	if (out_len == 0) return;
+	out[0] = '\0';
+	if (wpa == NULL) return;
+	for (i = 0; i < sizeof(messages) / sizeof(messages[0]); i++)
+		if ((wpa->found & messages[i].bit) != 0)
+		{
+			if (out[0] != '\0') strlcat(out, "+", out_len);
+			strlcat(out, messages[i].name, out_len);
+		}
+}
+
+static uint64_t eapol_replay_counter(const unsigned char * value)
+{
+	uint64_t replay = 0;
+	int i;
+
+	for (i = 0; i < 8; i++) replay = (replay << 8) | value[i];
+	return (replay);
+}
+
 static enum airodump_tui_message_style message_style_from_text(const char * message)
 {
 	if (message == NULL) return (AIRODUMP_TUI_MESSAGE_STYLE_DEFAULT);
@@ -952,7 +987,8 @@ static enum airodump_tui_message_style message_style_from_text(const char * mess
 	}
 
 	if (strstr(message, "PMKID captured in M1:") != NULL
-		|| strstr(message, "EAPOL M1+M2 captured") != NULL
+		|| (strstr(message, "EAPOL ") != NULL
+			&& strstr(message, "captured (usable)") != NULL)
 		|| strstr(message, "EAPOL four-way handshake complete") != NULL)
 	{
 		return (AIRODUMP_TUI_MESSAGE_STYLE_SUCCESS);
@@ -3934,11 +3970,23 @@ skip_probe:
 		if (h80211[z] == 0x88 && h80211[z + 1] == 0x8E
 			&& (h80211[1] & 0x40) != 0x40)
 		{
+			uint64_t now_us;
+			uint64_t replay_counter;
+
 			ap_cur->EAP_detected = 1;
 
 			z += 2; // skip ethertype
 
 			if (st_cur == NULL) goto write_packet;
+			if (z + 17 + 32 > (unsigned) caplen) goto write_packet;
+
+			gettimeofday(&tv, NULL);
+			now_us = (uint64_t) tv.tv_sec * SECOND_TO_MICROSEC + tv.tv_usec;
+			replay_counter = eapol_replay_counter(&h80211[z + 9]);
+			if (st_cur->wpa.timestamp_start_us > 0
+				&& subs_u64(now_us, st_cur->wpa.timestamp_start_us)
+					   > eapol_max_fourway_timeout)
+				memset(&st_cur->wpa, 0, sizeof(st_cur->wpa));
 
 			/* frame 1: Pairwise == 1, Install == 0, Ack == 1, MIC == 0 */
 
@@ -3946,10 +3994,19 @@ skip_probe:
 				&& (h80211[z + 6] & 0x80) != 0
 				&& (h80211[z + 5] & 0x01) == 0)
 			{
+				if (st_cur->wpa.timestamp_start_us == 0
+					|| subs_u64(now_us, st_cur->wpa.timestamp_last_us)
+						   > eapol_interframe_timeout)
+				{
+					memset(&st_cur->wpa, 0, sizeof(st_cur->wpa));
+					st_cur->wpa.timestamp_start_us = now_us;
+				}
+				st_cur->wpa.timestamp_last_us = now_us;
 				memcpy(st_cur->wpa.anonce, &h80211[z + 17], 32);
 
 				st_cur->wpa.state = 1;
 				st_cur->wpa.found |= 1 << 1;
+				st_cur->wpa.replay = replay_counter;
 
 				if (z + 99 <= (unsigned) caplen)
 				{
@@ -3999,12 +4056,24 @@ skip_probe:
 
 			/* frame 2 or 4: Pairwise == 1, Install == 0, Ack == 0, MIC == 1 */
 
-			if (z + 17 + 32 > (unsigned) caplen) goto write_packet;
-
 			if ((h80211[z + 6] & 0x08) != 0 && (h80211[z + 6] & 0x40) == 0
 				&& (h80211[z + 6] & 0x80) == 0
 				&& (h80211[z + 5] & 0x01) != 0)
 			{
+				if (st_cur->wpa.timestamp_start_us == 0)
+				{
+					st_cur->wpa.timestamp_start_us = now_us;
+					st_cur->wpa.timestamp_last_us = now_us;
+				}
+				if (subs_u64(now_us, st_cur->wpa.timestamp_last_us)
+					> eapol_interframe_timeout)
+					goto write_packet;
+				st_cur->wpa.timestamp_last_us = now_us;
+				if (st_cur->wpa.state == 0)
+					st_cur->wpa.replay = replay_counter;
+				else if (st_cur->wpa.replay != replay_counter)
+					goto write_packet;
+
 				if (memcmp(&h80211[z + 17], ZERO, 32) != 0)
 				{
 					memcpy(st_cur->wpa.snonce, &h80211[z + 17], 32);
@@ -4044,8 +4113,19 @@ skip_probe:
 
 			if ((h80211[z + 6] & 0x08) != 0 && (h80211[z + 6] & 0x40) != 0
 				&& (h80211[z + 6] & 0x80) != 0
-				&& (h80211[z + 5] & 0x01) != 0)
+				&& (h80211[z + 5] & 0x01) != 0
+				&& st_cur->wpa.replay < replay_counter)
 			{
+				if (st_cur->wpa.timestamp_start_us == 0)
+				{
+					st_cur->wpa.timestamp_start_us = now_us;
+					st_cur->wpa.timestamp_last_us = now_us;
+				}
+				if (subs_u64(now_us, st_cur->wpa.timestamp_last_us)
+					> eapol_interframe_timeout)
+					goto write_packet;
+				st_cur->wpa.timestamp_last_us = now_us;
+				st_cur->wpa.replay = replay_counter;
 				if (memcmp(&h80211[z + 17], ZERO, 32) != 0)
 				{
 					memcpy(st_cur->wpa.anonce, &h80211[z + 17], 32);
@@ -4077,16 +4157,21 @@ skip_probe:
 				}
 			}
 
-			if (st_cur->wpa.state == 7 && !is_filtered_essid(ap_cur->essid)
+			if (wpa_handshake_is_usable(&st_cur->wpa)
+				&& !is_filtered_essid(ap_cur->essid)
 				&& !ap_cur->handshake_logged)
 			{
+				char messages[16];
+
 				ap_cur->handshake_logged = 1;
 				memcpy(st_cur->wpa.stmac, st_cur->stmac, 6);
 				memcpy(lopt.wpa_bssid, ap_cur->bssid, 6);
+				format_wpa_messages(&st_cur->wpa, messages, sizeof(messages));
 				memset(lopt.message, '\x00', sizeof(lopt.message));
 				snprintf(lopt.message,
 						 sizeof(lopt.message) - 1,
-						 "][ EAPOL M1+M2 captured (usable): %02X:%02X:%02X:%02X:%02X:%02X ",
+						 "][ EAPOL %s captured (usable): %02X:%02X:%02X:%02X:%02X:%02X ",
+						 messages,
 						 lopt.wpa_bssid[0],
 						 lopt.wpa_bssid[1],
 						 lopt.wpa_bssid[2],
@@ -4140,8 +4225,10 @@ skip_probe:
 				}
 			}
 
-			if ((st_cur->wpa.found & ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4)))
-					== ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4))
+			if ((st_cur->wpa.found & (WPA_HANDSHAKE_M1 | WPA_HANDSHAKE_M2
+										 | WPA_HANDSHAKE_M3 | WPA_HANDSHAKE_M4))
+					== (WPA_HANDSHAKE_M1 | WPA_HANDSHAKE_M2
+						| WPA_HANDSHAKE_M3 | WPA_HANDSHAKE_M4)
 				&& !ap_cur->full_handshake_logged)
 			{
 				ap_cur->full_handshake_logged = 1;
@@ -6943,11 +7030,12 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 	char strbuf[1024];
 	char buffer[1024];
 	char ssid_list[512];
+	char wpa_messages[16];
 	struct AP_info * ap_cur;
 	struct ST_info * st_cur;
 	struct NA_info * na_cur;
 	int columns_ap = 83;
-	int columns_sta = 74;
+	int columns_sta = 80;
 	ssize_t len;
 
 	int num_ap;
@@ -7568,7 +7656,7 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 	{
 		strlcpy(strbuf,
 				" BSSID              STATION  LA "
-				"        PWR   Rate    Lost    Frames  Notes  Probes",
+				"        PWR   Rate    Lost    Frames  Notes        Probes",
 				sizeof(strbuf));
 		strbuf[ws_col - 1] = '\0';
 		console_puts(strbuf);
@@ -7684,10 +7772,13 @@ static void dump_print(int ws_row, int ws_col, int if_num)
 				printf("%c", (st_cur->qos_to_ds) ? 'e' : ' ');
 				printf("  %4d", st_cur->missed);
 				printf(" %8lu", st_cur->nb_pkt);
-				printf("  %-5s",
-					   (st_cur->wpa.pmkid[0] != 0)
-						   ? "PMKID"
-						   : (st_cur->wpa.state == 7 ? "EAPOL" : ""));
+				format_wpa_messages(&st_cur->wpa,
+									wpa_messages,
+									sizeof(wpa_messages));
+				printf("  %-11s",
+						   (st_cur->wpa.pmkid[0] != 0)
+							   ? "PMKID"
+							   : wpa_messages);
 
 				if (ws_col > (columns_sta - 6))
 				{
@@ -8982,6 +9073,36 @@ static int normalize_6ghz_hopper_frequency(int expected, int observed)
 	frequency = channel_to_frequency_ax(channel);
 
 	return (frequency > 0 ? frequency : observed);
+}
+
+/* Some drivers report a successful set operation while retaining their prior
+ * channel.  Match the hopper's read-back check before accepting a fixed
+ * startup channel, including one short delay for asynchronous changes. */
+static int channel_tune_verified(struct wif * wi, int channel)
+{
+	int effective = wi_get_channel(wi);
+
+	if (effective != channel)
+	{
+		usleep(10000);
+		effective = wi_get_channel(wi);
+	}
+	return (effective == channel);
+}
+
+static int frequency_tune_verified(struct wif * wi, int frequency)
+{
+	int effective = normalize_6ghz_hopper_frequency(frequency, wi_get_freq(wi));
+
+	if (effective != frequency)
+	{
+		usleep(10000);
+		effective = normalize_6ghz_hopper_frequency(frequency, wi_get_freq(wi));
+	}
+	/* A few 6 GHz drivers cannot report the selected frequency.  The hopper
+	 * intentionally accepts that case after a successful AX tuning request. */
+	if (lopt.band_mode == BAND_MODE_AX && effective <= 0) return (1);
+	return (effective == frequency);
 }
 
 static int band_from_frequency_or_channel(int frequency, int channel)
@@ -11614,13 +11735,15 @@ int main(int argc, char * argv[])
 								   lopt.ax_bw,
 								   lopt.c_seg0,
 								   lopt.c_seg1)
-						!= 0)
+						!= 0
+						|| !frequency_tune_verified(wi[i], lopt.frequency[0]))
 					{
 						tune_failed = 1;
 						break;
 					}
 #else
-					if (wi_set_freq(wi[i], lopt.frequency[0]) != 0)
+					if (wi_set_freq(wi[i], lopt.frequency[0]) != 0
+						|| !frequency_tune_verified(wi[i], lopt.frequency[0]))
 					{
 						tune_failed = 1;
 						break;
@@ -11706,13 +11829,15 @@ int main(int argc, char * argv[])
 				{
 #ifdef CONFIG_LIBNL
 					if (wi_set_ht_channel(wi[i], lopt.channel[0], lopt.htval)
-						!= 0)
+						!= 0
+						|| !channel_tune_verified(wi[i], lopt.channel[0]))
 					{
 						tune_failed = 1;
 						break;
 					}
 #else
-					if (wi_set_channel(wi[i], lopt.channel[0]) != 0)
+					if (wi_set_channel(wi[i], lopt.channel[0]) != 0
+						|| !channel_tune_verified(wi[i], lopt.channel[0]))
 					{
 						tune_failed = 1;
 						break;
