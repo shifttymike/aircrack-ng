@@ -1387,7 +1387,7 @@ static int launch_deauth(void)
 		st_cur = st_cur->next;
 	}
 
-	if (station_count == 0)
+	if (!use_csa && station_count == 0)
 	{
 		snprintf(lopt.message,
 				 sizeof(lopt.message),
@@ -1414,9 +1414,11 @@ static int launch_deauth(void)
 	append_tui_message_history_now(lopt.message);
 
 	st_cur = lopt.st_1st;
-	while (st_cur != NULL)
+	while (use_csa ? !csa_launched : st_cur != NULL)
 	{
-		if (time(NULL) - st_cur->tlast <= lopt.berlin && st_cur->base == ap_cur)
+		if (use_csa
+			|| (time(NULL) - st_cur->tlast <= lopt.berlin
+				&& st_cur->base == ap_cur))
 		{
 			int pipefd[2];
 			pid_t child_pid;
@@ -1426,7 +1428,6 @@ static int launch_deauth(void)
 			csa_launched = use_csa;
 			launched_any = 1;
 
-			format_mac(stmac, sizeof(stmac), st_cur->stmac);
 			if (use_csa)
 			{
 				snprintf(lopt.message,
@@ -1436,6 +1437,7 @@ static int launch_deauth(void)
 			}
 			else
 			{
+				format_mac(stmac, sizeof(stmac), st_cur->stmac);
 				snprintf(lopt.message,
 						 sizeof(lopt.message),
 						 "][ aireplay-ng %s",
@@ -1495,10 +1497,23 @@ static int launch_deauth(void)
 				close(pipefd[1]);
 				if (use_csa)
 				{
+					if (access("./aireplay-ng", X_OK) == 0)
+					{
+						execl("./aireplay-ng",
+							  "aireplay-ng",
+							  "--csa",
+							  "10",
+							  "--csa-channel",
+							  csa_channel_arg,
+							  "-a",
+							  apmac,
+							  wlan_if,
+							  (char *) NULL);
+					}
 					execlp("aireplay-ng",
 						   "aireplay-ng",
 						   "--csa",
-						   "5",
+						   "10",
 						   "--csa-channel",
 						   csa_channel_arg,
 						   "-a",
@@ -1507,6 +1522,19 @@ static int launch_deauth(void)
 						   (char *) NULL);
 				}
 
+				if (access("./aireplay-ng", X_OK) == 0)
+				{
+					execl("./aireplay-ng",
+						  "aireplay-ng",
+						  "-0",
+						  "5",
+						  "-a",
+						  apmac,
+						  "-c",
+						  stmac,
+						  wlan_if,
+						  (char *) NULL);
+				}
 				execlp("aireplay-ng",
 					   "aireplay-ng",
 					   "-0",
@@ -1572,7 +1600,7 @@ static int launch_deauth(void)
 					break;
 			}
 		}
-		st_cur = st_cur->next;
+		if (st_cur != NULL) st_cur = st_cur->next;
 	}
 
 restore_state:
